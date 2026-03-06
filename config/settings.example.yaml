@@ -1,0 +1,10 @@
+broker:
+  name: angel
+  api_key: YOUR_API_KEY
+  client_id: YOUR_CLIENT_ID
+  password: YOUR_PASSWORD
+  totp_secret: YOUR_TOTP_SECRET
+
+app:
+  theme: dark
+  log_level: INFO

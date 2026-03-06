@@ -1,0 +1,23 @@
+[project]
+name = "trading-terminal"
+version = "0.1.0"
+description = "Python desktop trading terminal built with PySide6"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "logzero>=1.7.0",
+    "numpy>=2.4.2",
+    "pyotp>=2.9.0",
+    "pyqtgraph>=0.14.0",
+    "pyside6>=6.10.2",
+    "pyyaml>=6.0.3",
+    "smartapi-python>=1.5.5",
+    "tzdata>=2025.3",
+    "websocket-client>=1.9.0",
+]
+
+[dependency-groups]
+dev = [
+    "black>=26.1.0",
+    "ruff>=0.15.5",
+]

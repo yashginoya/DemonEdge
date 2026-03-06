@@ -1,0 +1,18 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv/
+
+# App-specific ignores
+config/settings.yaml
+logs/
+config/layout.json
+data/instrument_master/
+.ruff_cache/
+.mypy_cache/
