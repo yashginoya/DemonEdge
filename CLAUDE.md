@@ -120,6 +120,21 @@ trading_terminal/
 - Never commit `.venv/` — it is in `.gitignore`.
 - `requirements.txt` is not used. `pyproject.toml` + `uv.lock` are the source of truth.
 
+## Git Rules
+
+**Claude must NEVER run any git command autonomously.** No exceptions.
+
+This means never run: `git add`, `git commit`, `git push`, `git pull`, `git fetch`, `git merge`, `git rebase`, `git stash`, `git checkout`, `git branch`, `git reset`, `git revert`, or any other git subcommand — unless explicitly instructed to do so in the current message.
+
+The only git-related actions Claude may take without being asked are read-only status checks: `git status`, `git log`, `git diff` — and only when directly relevant to understanding a problem.
+
+**Why this rule exists**: The developer controls when code is committed and pushed. Claude committing or pushing unreviewed work bypasses that control entirely.
+
+If Claude thinks something is worth committing (e.g. after completing a phase), it should say: "This looks like a good point to commit — let me know if you'd like me to stage and commit the changes." Then wait for explicit confirmation before touching git.
+
+---
+
+### Adding a New Widget
 
 1. Create a new folder under `widgets/` named after the feature.
 2. The main widget class must subclass `BaseWidget` (which subclasses `QDockWidget`).
