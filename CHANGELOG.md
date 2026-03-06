@@ -2,6 +2,22 @@
 
 ---
 
+## 2026-03-06 — Fix: remove blank central widget gap between dock widgets
+
+### Fixed
+- `app/main_window.py` — Blank space no longer appears between docked widgets (e.g. Watchlist and Chart). Root cause: `_setup_central_widget` created an expanding `_placeholder` QWidget inside the central area that Qt always reserved regardless of dock coverage.
+
+### Changed
+- `app/main_window.py` — `_setup_central_widget()` replaced with a zero-size dummy central widget (`setMaximumSize(0, 0)`, `setSizePolicy(Fixed, Fixed)`, `.hide()`). Dock widgets now expand to fill the entire window area edge-to-edge.
+- `app/main_window.py` — Added `_setup_banner()`. The disconnected warning banner (previously a `QFrame` inside the central widget) is now a secondary `QToolBar` (`ConnectionBanner`) added to `TopToolBarArea` with `addToolBarBreak`. It is shown/hidden via the same `self._banner.setVisible()` calls — no callers changed.
+- `app/main_window.py` — `_load_default_layout()` updated: watchlist left (280px), chart fills center, order_entry splits right (300px), positions+feed_status tabbed at bottom (180px). Explicit `splitDockWidget` calls ensure edge-to-edge fill.
+- `app/main_window.py` — Removed unused imports: `QFrame`, `QHBoxLayout`, `QVBoxLayout`. Added `QSizePolicy`.
+
+### Architecture Decisions
+- Banner moved to a toolbar instead of a central widget child: toolbars collapse to zero height when hidden (`.setVisible(False)`), whereas `QMainWindow` always reserves space for the central widget even when its contents are invisible.
+
+---
+
 ## 2026-03-06 — Instrument Master: local symbol cache for instant search
 
 ### Added

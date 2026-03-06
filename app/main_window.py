@@ -8,16 +8,14 @@ from PySide6.QtCore import Qt, QThread, QTimer
 from PySide6.QtCore import Signal as _Signal
 from PySide6.QtGui import QAction, QCloseEvent
 from PySide6.QtWidgets import (
-    QFrame,
-    QHBoxLayout,
     QLabel,
     QMainWindow,
     QMenu,
     QMessageBox,
+    QSizePolicy,
     QTabWidget,
     QToolBar,
     QToolButton,
-    QVBoxLayout,
     QWidget,
 )
 
@@ -92,6 +90,7 @@ class MainWindow(QMainWindow):
         # Build UI shell
         self._setup_menu()
         self._setup_toolbar()
+        self._setup_banner()
         self._setup_central_widget()
         self._setup_status_bar()
 
@@ -230,31 +229,38 @@ class MainWindow(QMainWindow):
         tb.addWidget(self._tb_add_btn)
 
     def _setup_central_widget(self) -> None:
-        root = QWidget()
-        layout = QVBoxLayout(root)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
+        # Zero-size dummy — dock widgets expand to fill all available space.
+        central = QWidget()
+        central.setMaximumSize(0, 0)
+        central.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.setCentralWidget(central)
+        self.centralWidget().hide()
 
-        # Disconnected banner
-        self._banner = QFrame()
-        self._banner.setFixedHeight(40)
+    def _setup_banner(self) -> None:
+        # Disconnected banner lives as a secondary toolbar so it doesn't consume
+        # any space once hidden (unlike a central-widget placeholder).
+        self.addToolBarBreak(Qt.ToolBarArea.TopToolBarArea)
+        self._banner = QToolBar("Connection Banner", self)
+        self._banner.setObjectName("ConnectionBanner")
+        self._banner.setMovable(False)
+        self._banner.setFloatable(False)
+        self._banner.setContextMenuPolicy(Qt.ContextMenuPolicy.PreventContextMenu)
         self._banner.setStyleSheet(
-            "background-color: #2d1a1a; border-bottom: 2px solid #6b2020;"
+            "QToolBar#ConnectionBanner {"
+            "  background-color: #2d1a1a;"
+            "  border: none;"
+            "  border-bottom: 2px solid #6b2020;"
+            "  spacing: 0; padding: 0 16px;"
+            "}"
         )
-        banner_layout = QHBoxLayout(self._banner)
-        banner_layout.setContentsMargins(16, 0, 16, 0)
-        banner_label = QLabel("⚠  Not connected to broker.  Go to  File → Connect to Broker.")
-        banner_label.setStyleSheet("color: #ff7b72; font-weight: bold; font-size: 13px;")
-        banner_layout.addWidget(banner_label)
-        banner_layout.addStretch()
-
-        # Empty placeholder that occupies the central area when no docks fill it
-        self._placeholder = QWidget()
-        self._placeholder.setStyleSheet("background-color: #0d1117;")
-
-        layout.addWidget(self._banner)
-        layout.addWidget(self._placeholder, 1)
-        self.setCentralWidget(root)
+        banner_label = QLabel(
+            "⚠  Not connected to broker.  Go to  File → Connect to Broker."
+        )
+        banner_label.setStyleSheet(
+            "color: #ff7b72; font-weight: bold; font-size: 13px;"
+        )
+        self._banner.addWidget(banner_label)
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self._banner)
 
     def _setup_status_bar(self) -> None:
         sb = self.statusBar()
@@ -487,31 +493,39 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _load_default_layout(self) -> None:
-        """Spawn widgets in the default arrangement."""
+        """Spawn widgets in the default arrangement.
+
+        With no central widget the dock areas expand to fill the window:
+          watchlist │ chart │ order_entry
+          ──────────┴───────┴────────────
+              positions / feed_status
+        """
+        # Left column
         watchlist = self.spawn_widget(
             "watchlist", Qt.DockWidgetArea.LeftDockWidgetArea
         )
+
+        # Right area — chart takes center, order_entry splits to its right
         chart = self.spawn_widget(
             "chart", Qt.DockWidgetArea.RightDockWidgetArea
         )
         order_entry = self.spawn_widget(
             "order_entry", Qt.DockWidgetArea.RightDockWidgetArea
         )
-        # Split chart and order_entry side-by-side horizontally
         self.splitDockWidget(chart, order_entry, Qt.Orientation.Horizontal)
 
+        # Bottom row — positions and feed_status tabbed together
         positions = self.spawn_widget(
             "positions", Qt.DockWidgetArea.BottomDockWidgetArea
         )
-
         feed_status = self.spawn_widget(
             "feed_status", Qt.DockWidgetArea.BottomDockWidgetArea
         )
-        # Tab feed_status alongside positions
         self.tabifyDockWidget(positions, feed_status)
 
         # Size hints (Qt respects these best-effort)
-        self.resizeDocks([watchlist], [260], Qt.Orientation.Horizontal)
+        self.resizeDocks([watchlist], [280], Qt.Orientation.Horizontal)
+        self.resizeDocks([order_entry], [300], Qt.Orientation.Horizontal)
         self.resizeDocks([positions], [180], Qt.Orientation.Vertical)
 
         logger.info("Default layout loaded")
