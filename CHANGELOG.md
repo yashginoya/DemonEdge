@@ -2,6 +2,13 @@
 
 ---
 
+## 2026-03-06 — Add README.md
+
+### Added
+- `README.md` — project README covering description, features, tech stack, prerequisites, installation, configuration, running, architecture overview, project structure, and contribution notes. Reflects only what is currently implemented.
+
+---
+
 ## 2026-03-06 — Fix: remove blank central widget gap between dock widgets
 
 ### Fixed
