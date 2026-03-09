@@ -2,6 +2,131 @@
 
 ---
 
+## 2026-03-09 — Fix: place_order crash + defensive response parsing across all broker methods
+
+### Fixed
+- `broker/angel_broker.py` — `place_order()` crashed with `AttributeError: 'str' object has no attribute 'get'` because Angel SmartAPI occasionally returns a JSON *string* instead of a parsed dict. Fixed by introducing `_parse_response()` helper that detects a string response, attempts `json.loads()`, and raises `BrokerAPIError` with a clear message if the string is not valid JSON. Also fixed `order_id` extraction: `data` field can be a dict (`{"orderid": "..."}`) or a bare string (Angel sometimes returns the ID directly as the `data` value); both shapes are handled. Error path now includes the API `message` and `errorcode` fields in the exception message.
+- `broker/angel_broker.py` — Applied the same `_parse_response()` defensive parsing to `get_order_book()`, `get_positions()`, `get_holdings()`, `cancel_order()`, and `get_profile()` — all were equally vulnerable to the string-response crash. All failure paths now log/raise the API's own `message` field instead of dumping the raw response object.
+
+### Added
+- `broker/angel_broker.py` — `_parse_response(resp, method_name) -> dict` private helper. Accepts any response object, normalises a string to dict via `json.loads`, rejects non-dict with a typed `BrokerAPIError`. Eliminates boilerplate type-checking from every individual method.
+- `broker/angel_broker.py` — `logger.debug` in `place_order()` logs the raw response type and value immediately after the API call, before any parsing. Useful for diagnosing future response-format surprises.
+
+### Architecture Decisions
+- **Centralised response normalisation in `_parse_response`**: the string-vs-dict ambiguity is a library-level issue (SmartAPI library sometimes returns pre-parsed JSON, sometimes raw string depending on SDK version and endpoint). Centralising the fix means adding a new broker method in future only needs `self._parse_response(...)` and doesn't require re-discovering the pattern.
+- **`order_id` extraction handles both dict and string `data`**: Angel docs show `data: {"orderid": "..."}` but in practice some API versions return `data: "<orderid>"` directly. Both shapes are extracted cleanly without a second crash.
+
+---
+
+## 2026-03-09 — Remove COVER variety + margin fetch debug & normalisation
+
+### Changed
+- `widgets/order_entry/order_form.py` — Removed COVER from the Variety toggle group. Buttons are now only `NORMAL` and `BRACKET`. Removed `is_cover` logic and COVER-specific trigger-field visibility from `_on_variety_changed()`. Removed "COVER" from `variety_map` in both `get_order_params()` and `_get_margin_params()`. Trigger row is now only shown for SL/SL-M order types. Saved layouts that previously stored variety="COVER" will silently fall back to NORMAL on restore.
+- `broker/angel_broker.py` — Removed COVER guard from `get_order_margin()` (no longer needed since the UI doesn't offer COVER). Added explicit price normalisation for non-MARKET orders: price is now formatted as `f"{float(price):.2f}"` (clean 2-decimal string). Improved failure logging: on `status=False` response, logs the API `message` field at WARNING level rather than raising a generic string. Improved debug logging: logs outgoing params and the full raw response at DEBUG level to assist diagnosis when margin shows `—`.
+
+### Debug scaffolding (temporary — remove once margin is confirmed working)
+- `widgets/order_entry/order_form.py` — `_start_margin_fetch()` now logs `"Margin fetch triggered"` at DEBUG to confirm the debounce timer is firing. Check `logs/terminal.log` after changing qty or price with an instrument selected.
+- `broker/angel_broker.py` — `get_order_margin()` logs `"sending params=..."` and `"raw response=..."` at DEBUG. These lines reveal the exact request and Angel API response for diagnosis.
+
+### Architecture Decisions
+- **COVER removed, not hidden**: Angel's COVER (CO) variety requires a trigger price and has strict INTRADAY-only constraints that created confusing interactions. Removing it from the UI eliminates an entire class of AB4033 errors at the source. If COVER support is needed in the future it can be re-added as its own dedicated form section.
+- **Price normalised in broker layer**: `f"{float(price):.2f}"` avoids sending `"1600.0"` or `"1600"` for limit prices. Angel's margin API has been observed to reject `"0.0"` for MARKET and is strict about number formats; ensuring a consistent 2-decimal string for all non-MARKET orders is the safest default.
+
+---
+
+## 2026-03-09 — Fix: AB4033 margin API validation + N/A display + font warning
+
+### Fixed
+- `broker/angel_broker.py` — `get_order_margin()`: Added pre-call validation guards. COVER variety is only valid with INTRADAY product type; BRACKET/ROBO is only valid with INTRADAY. If the combination is invalid, returns `0.0` immediately without calling the API (was previously sending the call and getting AB4033 Invalid Request). Also normalises MARKET order price to `"0"` (not `"0.0"`) and quantity to a plain integer string. Added `logger.debug` before the API call and for the raw response for easier future debugging.
+- `widgets/order_entry/order_form.py` — `_on_margin_done()`: now shows `"N/A"` in muted colour when margin returns `<= 0.0`. Previously showed `"₹0.00"` which was confusing when the combination was invalid or API returned zero.
+- `widgets/order_entry/order_form.py`, `widgets/watchlist/watchlist_tab.py`, `widgets/watchlist/add_manual_dialog.py` — All `_Signals` inner classes changed from `QWidget` to `QObject`. Using `QWidget` as a signal carrier was causing Qt to process a full widget font stack on instantiation; when the application stylesheet uses pixel-based font sizes, Qt's font system internally holds `pointSize == -1` which triggered the `QFont::setPointSize: Point size <= 0 (-1)` warning seen in logs. `QObject` carries signals identically without any UI overhead.
+
+### Architecture Decisions
+- **Return `0.0` (not raise) for invalid variety+product combos**: The margin display is informational — it should silently show "N/A" rather than flashing an error for a combination the user may be in the middle of changing. The validation is in the broker layer so it works for any future caller too.
+- **Normalise price/quantity in broker layer, not form**: The form already passes sensible values, but the broker layer is the authoritative place to enforce API wire format constraints (integer quantity strings, `"0"` not `"0.0"` for MARKET). This prevents the same mistake if `get_order_margin` is called from other places in the future.
+
+---
+
+## 2026-03-09 — Fix: order margin API method name and batch wrapper
+
+### Fixed
+- `broker/angel_broker.py` — `get_order_margin()` was calling `self._smart.orderMargin()` which does not exist on `SmartConnect`. The actual library method is `self._smart.getMarginApi()`. Additionally, the endpoint (`/margin/v1/batch`) is a batch API — it requires the params wrapped as `{"orders": [margin_params]}` and returns `data` as a list. Fixed both: now calls `getMarginApi({"orders": [margin_params]})` and unwraps the first element of the `data` list before reading the margin value. Added handling for both list and dict response shapes defensively.
+
+---
+
+## 2026-03-09 — Order Entry: LTP pre-fill + margin required display
+
+### Changed
+- `widgets/order_entry/order_form.py` —
+  **Fix 1 (LTP pre-fill):** Added `_current_ltp: float = 0.0` state variable, set in `_on_ltp_main()` on every tick. `_on_order_type_changed()` now pre-fills `_price_spin` with `_current_ltp` when switching to LIMIT or SL, but only if `_price_spin.value() == 0.0` (never overwrites a user-entered price). SL / SL-M also pre-fill `_trigger_spin` from `_current_ltp` if trigger is currently 0. MARKET and SL-M still clear and disable the price field. `_on_variety_changed()` similarly pre-fills the trigger when switching to COVER variety.
+  **Fix 2 (Margin row):** Added `_MarginWorker(QRunnable)` with inner `_Signals(QWidget)` for result/failure signals (consistent with existing worker pattern). Added `_margin_timer: QTimer` (600 ms single-shot debounce). Added `_margin_value: QLabel` displayed between the LTP row and the Place Order button. `_schedule_margin_fetch()` resets the debounce timer; `_start_margin_fetch()` builds params via `_get_margin_params()` and launches the worker. On success: shows `₹{margin:,.2f}` in white monospace. On failure: shows `—` in muted color; error logged at DEBUG level only. All form field changes (side, order type, product type, variety, qty, price) call `_schedule_margin_fetch()`. `set_instrument()` immediately shows "Calculating…" and schedules a fetch. If qty is 0 or no instrument is selected, shows `—` without launching a worker.
+
+- `broker/base_broker.py` — Added abstract method `get_order_margin(margin_params: dict) -> float`. Keys: `exchange`, `tradingsymbol`, `symboltoken`, `transactiontype`, `ordertype`, `producttype`, `variety`, `quantity` (str), `price` (str). Raises `BrokerAPIError` on failure.
+
+- `broker/angel_broker.py` — Implemented `get_order_margin()` via `SmartConnect.orderMargin()`. Handles multiple possible response shapes for `data`: numeric string, dict with `netMargin` / `totalMarginRequired` / `marginRequired` / `margin` key, or first numeric value in dict. Raises `BrokerAPIError` if the response is non-OK or the margin value cannot be extracted.
+
+### Architecture Decisions
+- **Debounce timer on qty/price changes**: `QSpinBox.valueChanged` fires on every arrow-key or keyboard press. A 600 ms single-shot timer (reset on every signal) prevents a REST call per keystroke. All other toggles (side, order type, product, variety) fire immediately on click so they feel responsive.
+- **`_current_ltp` stored on form, not fetched on demand**: LTP is already arriving via `MarketFeed` ticks on every update. Storing the last-seen value as `float` is zero-cost and avoids a REST call just to pre-fill a field.
+- **Pre-fill guard `value() == 0.0`**: only pre-fills when the field is blank/zero. If the user has already typed a price and switches order type (e.g. LIMIT → SL), their price is preserved.
+- **`_MarginWorker` uses `QRunnable` + `_Signals(QWidget)` pattern**: consistent with `_LtpFetchWorker` in `watchlist_tab.py`. `QRunnable` is pool-managed (no explicit thread lifecycle). `_Signals` must be created on the main thread (done in `__init__` before `start()`), satisfying Qt's `QObject` thread-affinity requirement.
+- **`_get_margin_params()` returns `None` when qty == 0**: avoids a pointless API call immediately after form load. The worker is never launched; the margin row shows `—`.
+
+---
+
+## 2026-03-09 — UI Polish: Custom dock title bar (float + close buttons)
+
+### Changed
+- `widgets/base_widget.py` — Added `BaseWidgetTitleBar(QWidget)` class with signals `close_clicked` and `float_clicked`. Custom title bar layout: title label (bold, `#e6edf3`, stretches left) → ⧉ float button → ✕ close button. Both buttons 20×20 px, flat, transparent background. Close button hover: `#3a1a1a` background, `#f85149` text. Float button hover: `#1a2a3a` background, `#1f6feb` text. Float button turns accent-colored when the widget is floating. Title bar background `#1f2937`, fixed height 28 px. QSS scoped via `setStyleSheet` on the title bar widget so rules do not leak into content. `BaseWidget.__init__()` now: sets `DockWidgetMovable | DockWidgetFloatable | DockWidgetClosable` features, installs `BaseWidgetTitleBar` via `setTitleBarWidget()`, connects `close_clicked → self.close()` and `float_clicked → self._toggle_float()`, connects `topLevelChanged → _on_float_state_changed()`. Added `_toggle_float()` and `_on_float_state_changed()` methods. All existing and future widgets inherit the title bar automatically — no subclass changes required.
+
+### Architecture Decisions
+- **Single file change for all widgets**: title bar is installed in `BaseWidget.__init__()` so every existing widget (Watchlist, Chart, Order Entry, Positions, Feed Status) and every future widget gets it automatically without any per-widget changes.
+- **`setTitleBarWidget()`**: replaces Qt's default title bar. The default bar is removed entirely; our custom bar handles all interactions (drag, float, close). Qt still provides the drag-to-dock behaviour because the widget is still a `QDockWidget`.
+- **`set_float_active()` object name swap + `unpolish/polish`**: changing `objectName` alone does not trigger a QSS re-evaluation mid-run. Calling `style().unpolish()` then `style().polish()` forces Qt to re-apply the stylesheet for the updated object name, giving immediate visual feedback when the widget is floated or re-docked.
+- **QSS scoped to title bar**: `setStyleSheet(_TITLEBAR_QSS)` is called on `BaseWidgetTitleBar` itself, not on `BaseWidget`. This constrains the button rules to the title bar widget subtree and prevents them from overriding button styles in content widgets (e.g. `OrderForm`'s BUY/SELL buttons).
+- **`DockWidgetFeatures` explicitly set**: ensures the dock is movable, floatable, and closable regardless of any platform or Qt-version default differences. Previously unset — now guaranteed in `BaseWidget`.
+
+---
+
+## 2026-03-09 — Phase 7: Order Entry & Positions/P&L Widgets
+
+### Added
+- `widgets/order_entry/order_form.py` — `OrderForm(QWidget)`: full embedded order entry form. BUY/SELL toggle (colored), symbol search (reuses `SearchDialog`), Order Type toggle group (MARKET/LIMIT/SL/SL-M), Product toggle (INTRADAY/DELIVERY), Variety toggle (NORMAL/BRACKET/COVER). Dynamic field visibility: price disabled for MARKET/SL-M, trigger shown for SL/SL-M/COVER, bracket block shown only when BRACKET selected. Inline validation with red error label. `get_order_params()` returns Angel SmartAPI `placeOrder` dict. LTP label updated via `MarketFeed` (feed thread → `_ltp_signal` → main thread). `save_state()`/`restore_state()` for side, order type, product, variety, instrument.
+- `widgets/order_entry/order_confirmation_dialog.py` — `OrderConfirmationDialog(QDialog)`: pre-trade confirmation popup. Shows side, qty, symbol, exchange, order type+price, product type. Confirm button colored by side (green/red). Not dismissable by clicking outside (`ApplicationModal`). Returns `Accepted`/`Rejected`.
+- `widgets/positions/positions_model.py` — `PositionsModel(QAbstractTableModel)`: 8 columns (Symbol, Exch, Qty, Avg Price, LTP, Unrealized P&L, Realized P&L, Total P&L). P&L columns colored green/red/muted by sign. `update_ltp()` emits targeted `dataChanged` for a single row. `set_positions()` does full reset. `get_totals()` for summary bar.
+- `widgets/positions/trades_model.py` — `TradesModel(QAbstractTableModel)`: 7 columns (Time, Symbol, Side, Qty, Price, Product, Status). Side colored green/red. Status colored by value. Sorted newest-first. `set_orders()` full reset.
+- `widgets/positions/pnl_summary.py` — `PnLSummary(QFrame)`: compact bar showing Realized / Unrealized / Total / Position count, each colored by sign. `update()` refreshes all labels.
+- `docs/order_entry_widget.md` — documents order type visibility rules, validation logic, Angel API parameter mapping, and watchlist → order entry integration.
+- `docs/positions_widget.md` — documents live P&L formulas, feed subscription lifecycle, periodic refresh merge strategy, and order placed → positions refresh flow.
+
+### Changed
+- `models/order.py` — full rewrite: all fields default to zero/empty (no required positional args). Added: `token`, `product_type`, `variety`, `trigger_price`, `squareoff`, `stoploss`, `trailing_stoploss`, `status_message`, `filled_quantity`, `average_price`. Removed: positional required fields (backward-compatible construction still works for named kwargs).
+- `models/position.py` — full rewrite: all fields default to zero/empty. Added: `token`, `product_type`, `overnight_quantity`, `buy_quantity`, `sell_quantity`, `buy_average`, `sell_average`, `close_price`, `unrealized_pnl`, `realized_pnl`, `total_pnl`. Removed: `pnl` (replaced by the three computed fields).
+- `broker/base_broker.py` — `place_order(instrument, side, order_type, quantity, price)` signature replaced with `place_order(order_params: dict)`. Accepts raw Angel API parameter dict. Documented required and optional keys.
+- `broker/angel_broker.py` — `place_order()` now passes `order_params` directly to `placeOrder()`. `get_positions()` maps all new `Position` fields from the response (token, product_type, overnight_qty, buy/sell quantities, averages, close_price, computed unrealized_pnl). `get_order_book()` maps all new `Order` fields (token, product_type, variety, trigger_price, status_message, filled_quantity, average_price). `get_holdings()` updated to new `Position` constructor (product_type="DELIVERY").
+- `widgets/order_entry/order_entry_widget.py` — full rewrite of placeholder. Embeds `OrderForm`. `_PlaceOrderWorker(QThread)` runs `place_order()` off the main thread. Status bar shows success (green, order ID) or failure (red, error). `order_placed = Signal(str)` emitted on success. `set_instrument()` unsubscribes previous feed and re-subscribes new. `on_show()` re-subscribes current instrument. `save_state()`/`restore_state()` delegates to `OrderForm`.
+- `widgets/positions/positions_widget.py` — full rewrite of placeholder. `_PositionsWorker(QThread)` fetches positions and order book. Live LTP via `subscribe_feed()` per open position. 30-second `QTimer` auto-refresh. `refresh()` public method for external trigger. `PnLSummary` updated after every LTP tick.
+- `widgets/watchlist/watchlist_tab.py` — added `instrument_selected = Signal(object)` emitted on row double-click. Added `_on_row_double_clicked()` handler.
+- `widgets/watchlist/watchlist_widget.py` — added `instrument_for_order_entry = Signal(object)` relayed from each tab's `instrument_selected`. Connected in `_create_tab()`.
+- `app/main_window.py` — added `send_instrument_to_order_entry()`, `_on_order_placed()`. `spawn_widget()` now connects `instrument_for_order_entry` for watchlist widgets and `order_placed` for order_entry widgets. `_restore_layout()` applies the same wiring for restored widgets.
+- `docs/architecture.md` — added "Inter-Widget Communication" section documenting the watchlist → order entry and order placed → positions refresh patterns.
+
+### Architecture Decisions
+- **`BaseBroker.place_order(order_params: dict)`**: changed from a narrow 5-arg signature to a raw dict pass-through. Rationale: the form needs to express bracket orders, SL orders, AMO, etc. — a fixed signature cannot capture all cases cleanly without an explosion of optional parameters. The dict matches Angel's `placeOrder` format directly. A future broker abstraction can define a translator layer inside its own `place_order()` if needed.
+- **`Position` / `Order` all-defaults dataclass**: making all fields default to zero/empty avoids positional-argument fragility when new fields are added. Construction remains concise with named kwargs.
+- **Full reset on 30-second positions refresh**: chosen over a merge strategy. Retail traders have <50 positions; `beginResetModel/endResetModel` at 30-second intervals has no visible cost. Simplicity > optimisation here.
+- **`_PositionsWorker` fetches positions and orders in the same thread run**: one worker, two sequential REST calls. Keeps the code simple and avoids race conditions between the two fetches.
+- **Watchlist → Order Entry via `MainWindow` relay**: widgets never hold references to siblings. All cross-widget routing is through `MainWindow` methods, consistent with existing watchlist → chart integration.
+- **`OrderForm._ltp_signal` (private `Signal`)**: `OrderForm` is a plain `QWidget`, not a `BaseWidget`, so it cannot use `subscribe_feed()`. The feed callback (`ltp_feed_callback`) is called on the feed thread and immediately emits `_ltp_signal` to cross to the main thread safely. The subscription is owned by `OrderEntryWidget` (which IS a `BaseWidget`) so `_unsubscribe_all_feeds()` handles cleanup.
+
+### Known Issues / TODOs
+- AMO (After Market Order) variety not exposed in the Order Entry UI. Add `"AMO"` to variety buttons when needed.
+- `TradesModel` shows all orders. Filtering to `status == "COMPLETE"` only requires a single-line change in `_on_orders_ready`.
+- Angel position response does not always return `symboltoken` — positions without a token will not receive live LTP updates (they will show the snapshot LTP from the REST response only).
+- `BaseBroker.cancel_order()` still defaults to "NORMAL" variety — bracket/cover order cancellation needs a variety parameter in a future update.
+
+---
+
 ## 2026-03-06 — Add README.md
 
 ### Added

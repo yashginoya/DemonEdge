@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QInputDialog,
     QMenu,
@@ -110,9 +110,15 @@ class WatchlistWidget(BaseWidget):
 
     Each tab is an independent :class:`~widgets.watchlist.watchlist_tab.WatchlistTab`
     with its own instrument list and MarketFeed subscriptions.
+
+    ``instrument_for_order_entry`` is emitted when a row is double-clicked in any
+    tab, so ``MainWindow`` can forward the instrument to ``OrderEntryWidget``.
     """
 
     widget_id = "watchlist"
+
+    # Relayed from WatchlistTab.instrument_selected
+    instrument_for_order_entry = Signal(object)  # Instrument
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__("Watchlist", parent)
@@ -151,6 +157,7 @@ class WatchlistWidget(BaseWidget):
 
     def _create_tab(self, name: str) -> WatchlistTab:
         tab = WatchlistTab(self._tabs)
+        tab.instrument_selected.connect(self.instrument_for_order_entry)
         self._tabs.addTab(tab, name)
         self._tabs.setCurrentWidget(tab)
         return tab

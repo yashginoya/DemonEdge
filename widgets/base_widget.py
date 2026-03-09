@@ -2,10 +2,121 @@ from abc import abstractmethod
 from typing import Callable
 
 from PySide6.QtCore import Signal
-from PySide6.QtGui import QCloseEvent, QHideEvent, QShowEvent
-from PySide6.QtWidgets import QDockWidget, QWidget
+from PySide6.QtGui import QCloseEvent, QFont, QHideEvent, QShowEvent
+from PySide6.QtWidgets import (
+    QDockWidget,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QSizePolicy,
+    QWidget,
+)
 
 from feed.feed_models import SubscriptionMode
+
+# ── Title bar QSS ─────────────────────────────────────────────────────────────
+# Scoped to BaseWidgetTitleBar via setStyleSheet on the title bar widget itself,
+# so the rules never leak into child content widgets.
+_TITLEBAR_QSS = """
+BaseWidgetTitleBar {
+    background: #1f2937;
+}
+QPushButton {
+    background: transparent;
+    border: none;
+    color: #8b949e;
+    font-size: 13px;
+    padding: 2px 6px;
+    border-radius: 3px;
+}
+QPushButton#closeBtn:hover {
+    background: #3a1a1a;
+    color: #f85149;
+}
+QPushButton#floatBtn:hover {
+    background: #1a2a3a;
+    color: #1f6feb;
+}
+QPushButton#floatBtnActive {
+    color: #1f6feb;
+}
+QPushButton#floatBtnActive:hover {
+    background: #1a2a3a;
+    color: #58a6ff;
+}
+"""
+
+
+class BaseWidgetTitleBar(QWidget):
+    """Custom title bar installed on every BaseWidget dock.
+
+    Layout (left → right):
+        [title label — stretches]  [⧉ float button]  [✕ close button]
+
+    Signals
+    -------
+    close_clicked
+        Emitted when the ✕ button is clicked.
+    float_clicked
+        Emitted when the ⧉ button is clicked.
+    """
+
+    close_clicked = Signal()
+    float_clicked = Signal()
+
+    def __init__(self, title: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setFixedHeight(28)
+        self.setStyleSheet(_TITLEBAR_QSS)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(8, 0, 4, 0)
+        layout.setSpacing(2)
+
+        # Title label
+        self._title_label = QLabel(title)
+        font = QFont()
+        font.setBold(True)
+        font.setPointSize(9)
+        self._title_label.setFont(font)
+        self._title_label.setStyleSheet("color: #e6edf3; background: transparent;")
+        self._title_label.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
+        layout.addWidget(self._title_label)
+
+        # Float / detach button
+        self._float_btn = QPushButton("⧉")
+        self._float_btn.setObjectName("floatBtn")
+        self._float_btn.setFixedSize(20, 20)
+        self._float_btn.setToolTip("Detach to floating window")
+        self._float_btn.clicked.connect(self.float_clicked)
+        layout.addWidget(self._float_btn)
+
+        # Close button
+        self._close_btn = QPushButton("✕")
+        self._close_btn.setObjectName("closeBtn")
+        self._close_btn.setFixedSize(20, 20)
+        self._close_btn.setToolTip("Close widget")
+        self._close_btn.clicked.connect(self.close_clicked)
+        layout.addWidget(self._close_btn)
+
+    # ------------------------------------------------------------------
+    # Public helpers (called by BaseWidget on state changes)
+    # ------------------------------------------------------------------
+
+    def set_float_active(self, active: bool) -> None:
+        """Highlight the float button when the widget is floating."""
+        self._float_btn.setObjectName("floatBtnActive" if active else "floatBtn")
+        # Force QSS re-evaluation after object name change
+        self._float_btn.style().unpolish(self._float_btn)
+        self._float_btn.style().polish(self._float_btn)
+
+    def set_float_button_tooltip(self, tooltip: str) -> None:
+        self._float_btn.setToolTip(tooltip)
+
+    def update_title(self, title: str) -> None:
+        self._title_label.setText(title)
 
 
 class BaseWidget(QDockWidget):
@@ -26,6 +137,12 @@ class BaseWidget(QDockWidget):
     Use ``self.subscribe_feed(exchange, token, callback, mode)`` instead of calling
     MarketFeed directly.  All subscriptions registered this way are automatically
     unsubscribed when the widget is hidden or closed — no need to touch ``on_hide()``.
+
+    Title bar
+    ---------
+    Every widget automatically gets a custom title bar with a float (⧉) button and
+    a close (✕) button.  No subclass action required — it is installed in
+    ``__init__``.
     """
 
     # Emitted from closeEvent so MainWindow can clean up _active_widgets
@@ -36,8 +153,27 @@ class BaseWidget(QDockWidget):
 
     def __init__(self, title: str, parent: QWidget | None = None) -> None:
         super().__init__(title, parent)
+
         # Tracks subscriptions made via subscribe_feed() for auto-cleanup
         self._feed_subscriptions: list[tuple[str, str, Callable, int]] = []
+
+        # Ensure all dock features are enabled
+        self.setFeatures(
+            QDockWidget.DockWidgetFeature.DockWidgetMovable
+            | QDockWidget.DockWidgetFeature.DockWidgetFloatable
+            | QDockWidget.DockWidgetFeature.DockWidgetClosable
+        )
+
+        # Install custom title bar
+        self._title_bar = BaseWidgetTitleBar(title=title, parent=self)
+        self.setTitleBarWidget(self._title_bar)
+
+        # Wire title bar buttons
+        self._title_bar.close_clicked.connect(self.close)
+        self._title_bar.float_clicked.connect(self._toggle_float)
+
+        # Update float button appearance when floating state changes
+        self.topLevelChanged.connect(self._on_float_state_changed)
 
     # ------------------------------------------------------------------
     # Abstract contract
@@ -62,6 +198,21 @@ class BaseWidget(QDockWidget):
     def restore_state(self, state: dict) -> None:
         """Restore widget from a previously saved state dict."""
         ...
+
+    # ------------------------------------------------------------------
+    # Float / title bar helpers
+    # ------------------------------------------------------------------
+
+    def _toggle_float(self) -> None:
+        self.setFloating(not self.isFloating())
+
+    def _on_float_state_changed(self, floating: bool) -> None:
+        if floating:
+            self._title_bar.set_float_button_tooltip("Re-attach to main window")
+            self._title_bar.set_float_active(True)
+        else:
+            self._title_bar.set_float_button_tooltip("Detach to floating window")
+            self._title_bar.set_float_active(False)
 
     # ------------------------------------------------------------------
     # Feed helpers

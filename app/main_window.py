@@ -472,6 +472,16 @@ class MainWindow(QMainWindow):
             lambda iid=instance_id: QTimer.singleShot(0, lambda: self.remove_widget(iid))
         )
 
+        # Inter-widget wiring
+        if widget.widget_id == "watchlist":
+            widget.instrument_for_order_entry.connect(  # type: ignore[attr-defined]
+                self.send_instrument_to_order_entry
+            )
+        if widget.widget_id == "order_entry":
+            widget.order_placed.connect(  # type: ignore[attr-defined]
+                lambda _oid: self._on_order_placed()
+            )
+
         logger.debug("Widget spawned: %s", instance_id)
         return widget
 
@@ -487,6 +497,18 @@ class MainWindow(QMainWindow):
             if w.widget_id == widget_id:
                 return w
         return None
+
+    def send_instrument_to_order_entry(self, instrument) -> None:
+        """Forward an instrument from a watchlist double-click to OrderEntryWidget."""
+        w = self.get_first_widget_of_type("order_entry")
+        if w is not None:
+            w.set_instrument(instrument)  # type: ignore[attr-defined]
+
+    def _on_order_placed(self) -> None:
+        """Refresh PositionsWidget immediately after an order is placed."""
+        w = self.get_first_widget_of_type("positions")
+        if w is not None:
+            w.refresh()  # type: ignore[attr-defined]
 
     # ------------------------------------------------------------------
     # Layout
@@ -546,6 +568,15 @@ class MainWindow(QMainWindow):
             w.closed.connect(
                 lambda iid=w.instance_id: QTimer.singleShot(0, lambda: self.remove_widget(iid))
             )
+            # Re-wire inter-widget signals for restored widgets
+            if w.widget_id == "watchlist":
+                w.instrument_for_order_entry.connect(  # type: ignore[attr-defined]
+                    self.send_instrument_to_order_entry
+                )
+            if w.widget_id == "order_entry":
+                w.order_placed.connect(  # type: ignore[attr-defined]
+                    lambda _oid: self._on_order_placed()
+                )
 
     def _save_layout(self) -> None:
         if not self._active_widgets:

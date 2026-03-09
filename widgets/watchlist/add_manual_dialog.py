@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QRunnable, QThreadPool, Qt, Signal
+from PySide6.QtCore import QObject, QRunnable, QThreadPool, Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -24,7 +24,7 @@ _EXCHANGES = ["NSE", "BSE", "NFO", "BFO", "MCX"]
 class _LookupWorker(QRunnable):
     """Verifies a token exists via get_ltp() and returns the LTP."""
 
-    class _Signals(QWidget):  # tiny QObject for signals
+    class _Signals(QObject):
         done = Signal(float)
         error = Signal(str)
 

@@ -111,6 +111,46 @@ Import `Foo` directly — do not instantiate.
 - `MarketFeed._subscribers` is protected by `threading.Lock`.
 - Broker REST calls run in `QThreadPool` workers — never block the main thread.
 
+## Inter-Widget Communication
+
+Widgets are self-contained and do not hold references to each other.
+Cross-widget communication goes through `MainWindow` as the message broker,
+using Qt signals.
+
+### Pattern: Watchlist → Order Entry
+
+```
+WatchlistTab.doubleClicked
+  → WatchlistTab.instrument_selected (Signal)
+  → WatchlistWidget.instrument_for_order_entry (relay Signal)
+  → MainWindow.send_instrument_to_order_entry()
+  → OrderEntryWidget.set_instrument(instrument)
+```
+
+`MainWindow.spawn_widget()` connects `instrument_for_order_entry` immediately
+after creating any `WatchlistWidget`.  `_restore_layout()` does the same for
+restored widgets so the connection is never missed.
+
+### Pattern: Order Placed → Positions Refresh
+
+```
+OrderEntryWidget._on_order_success()
+  → OrderEntryWidget.order_placed (Signal, carries order_id)
+  → MainWindow._on_order_placed()
+  → PositionsWidget.refresh()
+```
+
+Connected in `spawn_widget()` and `_restore_layout()` for the same reason.
+
+### Rules
+
+- Widgets **never** hold direct references to sibling widgets.
+- All cross-widget routing goes through `MainWindow` methods.
+- `MainWindow` uses `get_first_widget_of_type(widget_id)` to find target widgets.
+- If the target widget is not open, the signal is silently dropped (no error).
+
+---
+
 ## pyqtgraph Configuration
 
 pyqtgraph global options **must be set before `QApplication` is created** in `main.py`:

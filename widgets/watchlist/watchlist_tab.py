@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QModelIndex, QRunnable, QThreadPool, Qt, QTimer, Signal
+from PySide6.QtCore import QModelIndex, QObject, QRunnable, QThreadPool, Qt, QTimer, Signal
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -30,7 +30,7 @@ logger = get_logger(__name__)
 class _LtpFetchWorker(QRunnable):
     """Fetches initial LTP for a token off the main thread."""
 
-    class _Signals(QWidget):
+    class _Signals(QObject):
         done = Signal(str, float)   # token, ltp
         failed = Signal(str)        # token
 
@@ -59,6 +59,9 @@ class WatchlistTab(QWidget):
 
     # Emitted from feed thread; connected to _on_tick_ui (main thread)
     tick_arrived = Signal(object)  # Tick
+
+    # Emitted when user double-clicks a row — carries the Instrument
+    instrument_selected = Signal(object)  # Instrument
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -138,6 +141,9 @@ class WatchlistTab(QWidget):
         self._table.selectionModel().selectionChanged.connect(
             lambda sel, _: self._remove_btn.setEnabled(len(sel.indexes()) > 0)
         )
+
+        # Double-click → emit instrument_selected
+        self._table.doubleClicked.connect(self._on_row_double_clicked)
 
         # Delete key removes selected row
         self._table.keyPressEvent = self._table_key_press
@@ -299,6 +305,11 @@ class WatchlistTab(QWidget):
             chart._load_chart(instrument, chart._timeframe)
         else:
             logger.debug("No chart widget open to receive instrument")
+
+    def _on_row_double_clicked(self, index: QModelIndex) -> None:
+        """Emit instrument_selected when the user double-clicks a row."""
+        row = self._model.get_row(index.row())
+        self.instrument_selected.emit(row.instrument)
 
     def _table_key_press(self, event) -> None:
         if event.key() == Qt.Key.Key_Delete:

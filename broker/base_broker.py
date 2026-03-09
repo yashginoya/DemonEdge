@@ -63,15 +63,17 @@ class BaseBroker(ABC):
         ...
 
     @abstractmethod
-    def place_order(
-        self,
-        instrument: Instrument,
-        side: str,
-        order_type: str,
-        quantity: int,
-        price: float,
-    ) -> str:
-        """Place an order. Returns the broker-assigned order_id string."""
+    def place_order(self, order_params: dict) -> str:
+        """Place an order using a raw broker parameter dict.
+
+        The dict keys match the Angel SmartAPI ``placeOrder`` format.
+        Required keys: ``variety``, ``tradingsymbol``, ``symboltoken``,
+        ``transactiontype``, ``exchange``, ``ordertype``, ``producttype``,
+        ``duration``, ``price``, ``quantity``.
+        Optional: ``triggerprice``, ``squareoff``, ``stoploss``,
+        ``trailingStopLoss``.
+        Returns the broker-assigned order_id string.
+        """
         ...
 
     @abstractmethod
@@ -87,6 +89,17 @@ class BaseBroker(ABC):
     @abstractmethod
     def search_instruments(self, query: str) -> list[Instrument]:
         """Search instruments by name/symbol. Returns matching Instrument objects."""
+        ...
+
+    @abstractmethod
+    def get_order_margin(self, margin_params: dict) -> float:
+        """Return the margin required for an order in rupees.
+
+        ``margin_params`` keys: ``exchange``, ``tradingsymbol``, ``symboltoken``,
+        ``transactiontype``, ``ordertype``, ``producttype``, ``variety``,
+        ``quantity`` (str), ``price`` (str).
+        Raises ``BrokerAPIError`` on failure.
+        """
         ...
 
     @abstractmethod
