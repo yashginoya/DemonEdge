@@ -2,6 +2,38 @@
 
 ---
 
+## 2026-03-09 — Phase 8: Option Chain Widget
+
+### Added
+- `widgets/option_chain/__init__.py` — self-registers `OptionChainWidget` with `WidgetRegistry` under category "Market Data".
+- `widgets/option_chain/option_chain_widget.py` — main `QDockWidget`; toolbar (underlying input, expiry combo, column selector, status label), underlying LTP bar, `QTableView` with two-row header. Uses `QRunnable` worker (`_ChainLoadWorker`) to fetch expiries + build chain + get underlying LTP off the main thread. Feed subscriptions via `subscribe_feed()` with `SNAP_QUOTE` for CE/PE tokens and `LTP` for the underlying.
+- `widgets/option_chain/option_chain_model.py` — `OptionChainModel(QAbstractTableModel)` with `update_ce()`, `update_pe()`, `update_atm()` for incremental live updates; `OptionChainHeaderView(QHeaderView)` for two-row header (CALLS / PUTS group labels spanning CE/PE columns).
+- `widgets/option_chain/option_chain_row.py` — `OptionChainRow` dataclass (strike, CE/PE fields: ltp, oi, oi_change, iv, delta, volume, is_atm flag).
+- `widgets/option_chain/option_chain_builder.py` — `build_chain()`, `get_expiries()`, `get_atm_strike()` functions; directly iterates `InstrumentMaster._index` for full unfiltered scan. Expiry strings parsed via `datetime.strptime("%d%b%Y")` and sorted nearest first.
+- `widgets/option_chain/iv_calculator.py` — Black-Scholes price, `calculate_iv()` (Newton-Raphson, up to 100 iterations, converges at `|diff| < 1e-6`), `calculate_delta()`. Uses `scipy.stats.norm.cdf`.
+- `widgets/option_chain/column_selector_dialog.py` — `ColumnSelectorDialog(QDialog)`; grouped by CALLS / CENTER / PUTS sections; `ce_ltp`, `strike`, `pe_ltp` always-on; "Reset to Default" and "Apply" buttons; writes back to `ALL_COLUMNS` in-place and emits `columns_changed`.
+- `docs/option_chain_widget.md` — full documentation for chain building, IV calculation, subscription strategy, two-row header, ATM computation, column visibility, and state persistence.
+- `pyproject.toml` — added `scipy>=1.17.1` dependency via `uv add scipy`.
+
+### Changed
+- `app/main_window.py` — added `import widgets.option_chain` to trigger self-registration.
+- `docs/architecture.md` — added External Dependencies note for `scipy`.
+
+### Architecture Decisions
+- **Black-Scholes + Newton-Raphson for IV**: standard approach; converges in < 10 iterations for normal market conditions. Returns 0.0 on failure rather than raising, so a bad tick doesn't crash the table.
+- **INDEX_TOKENS hardcoded dict**: Angel instrument master does not have a reliable way to identify index cash tokens from the options records. Hardcoding NIFTY=26000, BANKNIFTY=26009 etc. is the accepted practice. Stock options fall back to searching for `{NAME}-EQ` on NSE.
+- **Direct `InstrumentMaster._index` scan** in `OptionChainBuilder`: the `search()` public API has a `max_results` cap and scoring that is unsuitable for exact-match bulk filtering. Direct access to the raw index list is intentional for this use case.
+- **SNAP_QUOTE mode for CE/PE, LTP for underlying**: SNAP_QUOTE gives volume + OHLC which enables IV calculation; LTP is sufficient for the underlying price bar and ATM tracking.
+- **Subscription limit guard at 950 tokens**: Angel limits to ~1000 active tokens per WebSocket session. With NIFTY having ~150 strikes = 300 tokens, this is generally safe. For wider underlyings, the guard restricts to ±50 strikes of ATM.
+- **ATM recomputed on every underlying tick** (not throttled): acceptable since the model only emits `dataChanged` for background role, which is cheap.
+
+### Known Issues / TODOs
+- OI and OI Change always show `—` because `Tick` model and `MarketFeed._parse_tick()` do not yet extract `open_interest` / `open_interest_change` from the SNAP_QUOTE binary payload. Requires extending `models/tick.py` and `feed/market_feed.py`.
+- BSE option chain (BFO exchange) not implemented.
+- IV and Delta show `—` during non-market hours (LTP = 0 from feed). Expected behaviour.
+
+---
+
 ## 2026-03-09 — Fix: place_order crash + defensive response parsing across all broker methods
 
 ### Fixed

@@ -31,6 +31,7 @@ import widgets.chart.chart_widget  # noqa: F401
 import widgets.order_entry.order_entry_widget  # noqa: F401
 import widgets.positions.positions_widget  # noqa: F401
 import widgets.feed_status.feed_status_widget  # noqa: F401
+import widgets.option_chain  # noqa: F401
 
 logger = get_logger(__name__)
 

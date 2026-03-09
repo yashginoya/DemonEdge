@@ -151,6 +151,14 @@ Connected in `spawn_widget()` and `_restore_layout()` for the same reason.
 
 ---
 
+## External Dependencies Note
+
+`scipy` (`scipy.stats.norm`) is used exclusively by `widgets/option_chain/iv_calculator.py`
+for the normal CDF in Black-Scholes option pricing. It is not used anywhere else.
+Install: `uv add scipy`.
+
+---
+
 ## pyqtgraph Configuration
 
 pyqtgraph global options **must be set before `QApplication` is created** in `main.py`:
