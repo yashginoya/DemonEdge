@@ -16,7 +16,8 @@
 - `pyproject.toml` — added `scipy>=1.17.1` dependency via `uv add scipy`.
 
 ### Changed
-- `app/main_window.py` — added `import widgets.option_chain` to trigger self-registration.
+- `main.py` — set application window icon from `icons/app_icon.png`.
+- `app/main_window.py` — set window icon fallback from `icons/app_icon.png`.
 - `docs/architecture.md` — added External Dependencies note for `scipy`.
 
 ### Architecture Decisions

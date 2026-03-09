@@ -1,6 +1,8 @@
 import sys
+from pathlib import Path
 
 import pyqtgraph as pg
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
 from app.app_state import AppState
@@ -33,6 +35,10 @@ def main() -> None:
 
     app = QApplication(sys.argv)
     app.setApplicationName("Trading Terminal")
+
+    # Set app icon (shown in taskbar / window title bar)
+    icon_path = Path(__file__).resolve().parent / "icons" / "app_icon.png"
+    app.setWindowIcon(QIcon(str(icon_path)))
 
     # Apply global dark theme before any windows are created
     apply_theme(app)

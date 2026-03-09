@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 from PySide6.QtCore import Qt, QThread, QTimer
 from PySide6.QtCore import Signal as _Signal
-from PySide6.QtGui import QAction, QCloseEvent
+from PySide6.QtGui import QAction, QCloseEvent, QIcon
 from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
@@ -77,6 +77,13 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Trading Terminal")
         self.setMinimumSize(1024, 600)
         self.resize(1400, 900)
+
+        # Set window icon (fallback in case app icon isn't applied)
+        icon_path = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)), "icons", "app_icon.png"
+        )
+        self.setWindowIcon(QIcon(icon_path))
+
         self.setDockNestingEnabled(True)
         self.setTabPosition(
             Qt.DockWidgetArea.AllDockWidgetAreas,
