@@ -130,6 +130,13 @@ class WatchlistModel(QAbstractTableModel):
             if row.instrument.token == token:
                 old_ltp = row.ltp
                 row.ltp = tick.ltp
+
+                # Capture prev_close from the tick's closed_price on the first tick
+                # that provides it.  Never overwrite once set — it is a static
+                # reference price for the entire session.
+                if row.prev_close == 0 and tick.close is not None and tick.close > 0:
+                    row.prev_close = tick.close
+
                 if row.prev_close > 0:
                     row.change = tick.ltp - row.prev_close
                     row.change_pct = (row.change / row.prev_close) * 100
@@ -149,18 +156,24 @@ class WatchlistModel(QAbstractTableModel):
                 return i
         return -1
 
-    def update_initial_ltp(self, token: str, ltp: float) -> None:
-        """Set initial LTP and prev_close from a REST fetch.
+    def update_initial_ltp(self, token: str, ltp: float, prev_close: float = 0.0) -> None:
+        """Populate LTP and prev_close from a REST snapshot quote.
 
-        Sets both so change shows '0.00' (flat) immediately after add,
-        then updates properly as ticks arrive.
+        ``prev_close`` is only written when the row has none yet (== 0) — this
+        guards against a slow REST response arriving after a live tick has
+        already set the authoritative value from the WebSocket feed.
+
+        After market hours there are no live ticks, so this is the sole source
+        of both values; change and chg_pct are computed immediately.
         """
         for i, row in enumerate(self._rows):
             if row.instrument.token == token:
                 row.ltp = ltp
-                row.prev_close = ltp
-                row.change = 0.0
-                row.change_pct = 0.0
+                if prev_close > 0 and row.prev_close == 0:
+                    row.prev_close = prev_close
+                if row.prev_close > 0:
+                    row.change = row.ltp - row.prev_close
+                    row.change_pct = (row.change / row.prev_close) * 100
                 tl = self.index(i, 0)
                 br = self.index(i, self.COLUMN_COUNT - 1)
                 self.dataChanged.emit(tl, br)

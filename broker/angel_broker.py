@@ -332,6 +332,30 @@ class AngelBroker(BaseBroker):
             logger.exception("AngelBroker.get_ltp() failed")
             raise BrokerAPIError(f"get_ltp failed: {exc}") from exc
 
+    def get_quote(self, exchange: str, token: str) -> dict:
+        """Return LTP and previous day's close for a single instrument.
+
+        Uses Angel's ``ltpData()`` endpoint.  The ``close`` field in the
+        response is the previous session's closing price (not today's close).
+
+        Returns ``{"ltp": float, "prev_close": float}``.
+        """
+        self._require_connection()
+        try:
+            resp = self._smart.ltpData(exchange, token, token)
+            if not resp or not resp.get("status"):
+                raise BrokerAPIError(f"get_quote failed: {resp}")
+            data = resp.get("data", {})
+            return {
+                "ltp": _safe_float(data.get("ltp")),
+                "prev_close": _safe_float(data.get("close")),
+            }
+        except BrokerAPIError:
+            raise
+        except Exception as exc:
+            logger.exception("AngelBroker.get_quote() failed")
+            raise BrokerAPIError(f"get_quote failed: {exc}") from exc
+
     def get_order_margin(self, margin_params: dict) -> float:
         """Return margin required for an order in rupees.
 

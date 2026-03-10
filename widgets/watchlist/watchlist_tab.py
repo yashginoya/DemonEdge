@@ -27,26 +27,26 @@ from utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-class _LtpFetchWorker(QRunnable):
-    """Fetches initial LTP for a token off the main thread."""
+class _QuoteFetchWorker(QRunnable):
+    """Fetches snapshot quote (LTP + prev_close) for a token off the main thread."""
 
     class _Signals(QObject):
-        done = Signal(str, float)   # token, ltp
-        failed = Signal(str)        # token
+        done = Signal(str, float, float)   # token, ltp, prev_close
+        failed = Signal(str)               # token
 
     def __init__(self, exchange: str, token: str) -> None:
         super().__init__()
-        self.signals = _LtpFetchWorker._Signals()
+        self.signals = _QuoteFetchWorker._Signals()
         self._exchange = exchange
         self._token = token
 
     def run(self) -> None:
         try:
             from broker.broker_manager import BrokerManager
-            ltp = BrokerManager.get_broker().get_ltp(self._exchange, self._token)
-            self.signals.done.emit(self._token, ltp)
+            quote = BrokerManager.get_broker().get_quote(self._exchange, self._token)
+            self.signals.done.emit(self._token, quote["ltp"], quote["prev_close"])
         except Exception as exc:
-            logger.debug("LTP fetch failed for %s:%s — %s", self._exchange, self._token, exc)
+            logger.debug("Quote fetch failed for %s:%s — %s", self._exchange, self._token, exc)
             self.signals.failed.emit(self._token)
 
 
@@ -199,8 +199,8 @@ class WatchlistTab(QWidget):
             )
             self._subscribed.add(key)
 
-        # Fetch initial LTP in background
-        worker = _LtpFetchWorker(instrument.exchange, instrument.token)
+        # Fetch snapshot quote (LTP + prev_close) in background
+        worker = _QuoteFetchWorker(instrument.exchange, instrument.token)
         worker.signals.done.connect(self._on_initial_ltp)
         QThreadPool.globalInstance().start(worker)
 
@@ -232,9 +232,9 @@ class WatchlistTab(QWidget):
         """Runs on Qt main thread — update model."""
         self._model.update_tick(tick.token, tick)
 
-    def _on_initial_ltp(self, token: str, ltp: float) -> None:
-        """REST fetch result — set initial LTP and prev_close."""
-        self._model.update_initial_ltp(token, ltp)
+    def _on_initial_ltp(self, token: str, ltp: float, prev_close: float) -> None:
+        """REST quote fetch result — populate LTP and prev_close from snapshot."""
+        self._model.update_initial_ltp(token, ltp, prev_close)
 
     # ------------------------------------------------------------------
     # Flash animation

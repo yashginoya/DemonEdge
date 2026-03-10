@@ -273,6 +273,12 @@ class _MarketFeed:
             # Optional QUOTE / SNAP_QUOTE fields
             ltq = atp = volume = tbq = tsq = open_p = high_p = low_p = close_p = None
 
+            # closed_price (previous day's close) is sent in all subscription modes
+            # by Angel One — parse it unconditionally so LTP-mode subscribers can use
+            # it for CHANGE / CHG% calculations.
+            _close_raw = int(data.get("closed_price", 0))
+            close_p = _close_raw / 100.0 if _close_raw > 0 else None
+
             if mode in (SubscriptionMode.QUOTE, SubscriptionMode.SNAP_QUOTE):
                 ltq = int(data.get("last_traded_quantity", 0))
                 atp = int(data.get("average_traded_price", 0)) / 100.0
@@ -282,7 +288,7 @@ class _MarketFeed:
                 open_p = int(data.get("open_price_of_the_day", 0)) / 100.0
                 high_p = int(data.get("high_price_of_the_day", 0)) / 100.0
                 low_p = int(data.get("low_price_of_the_day", 0)) / 100.0
-                close_p = int(data.get("closed_price", 0)) / 100.0
+                # close_p already parsed above
 
             return Tick(
                 token=token,

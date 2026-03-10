@@ -2,6 +2,41 @@
 
 ---
 
+## 2026-03-10 — Fix: Watchlist REST snapshot populates LTP + prev_close after market hours
+
+### Added
+- `broker/base_broker.py` — new abstract method `get_quote(exchange, token) -> dict` returning `{"ltp": float, "prev_close": float}`.
+- `broker/angel_broker.py` — implemented `get_quote` using Angel's `ltpData()` endpoint; extracts both `ltp` and `close` (prev day's close) from the response in one call.
+
+### Changed
+- `widgets/watchlist/watchlist_tab.py` — renamed `_LtpFetchWorker` → `_QuoteFetchWorker`; its `done` signal now carries `(token, ltp, prev_close)` instead of just `(token, ltp)`; `run()` calls `broker.get_quote()` instead of `broker.get_ltp()`. `_on_initial_ltp` updated to accept and forward both values.
+- `widgets/watchlist/watchlist_model.py` — `update_initial_ltp` now accepts `prev_close` and writes it (with the `prev_close == 0` guard so a slow REST response cannot clobber a live-tick value). Change and chg_pct are computed immediately from the REST data, so after-hours watchlists display correct values on startup without needing any live tick.
+
+### Architecture Decisions
+- REST snapshot is the fallback source for both LTP and prev_close (runs on every symbol add and at startup for restored symbols). Live tick data takes precedence: the `prev_close == 0` guard in both `update_tick` and `update_initial_ltp` ensures whichever arrives first wins and subsequent calls are no-ops for that field.
+
+---
+
+## 2026-03-10 — Fix: Watchlist CHANGE / CHG% now uses previous day's close
+
+### Fixed
+- `feed/market_feed.py` — `_parse_tick` was only extracting `closed_price` in QUOTE/SNAP_QUOTE mode. Angel One sends it in LTP mode too. Moved `closed_price` parsing outside the mode guard so `Tick.close` is always populated, regardless of subscription mode.
+- `widgets/watchlist/watchlist_model.py` — `update_tick`: added logic to capture `tick.close` as `row.prev_close` on the **first** tick for each symbol (`prev_close == 0` guard). This is never overwritten on subsequent ticks, making it a stable session reference. CHANGE and CHG% are now `LTP − prev_close` / `prev_close × 100` against the actual previous day's close, not the open.
+- `widgets/watchlist/watchlist_model.py` — `update_initial_ltp`: removed incorrect `prev_close = ltp` assignment. Setting prev_close to today's LTP produced a false 0.00 change on add. Change/Chg% now display `—` until the first live tick arrives (which carries the real prev close).
+
+### Architecture Decisions
+- prev_close is sourced exclusively from `Tick.close` (i.e., `closed_price` in SmartWebSocketV2 binary frame) — this is the correct field per Angel One docs. No REST call is made for it.
+- The "capture on first tick, never overwrite" pattern ensures the reference price stays stable all session even as LTP fluctuates.
+
+---
+
+## 2026-03-09 — UI: Consolidate status info into bottom status bar
+
+### Changed
+- `app/main_window.py` — Removed the top toolbar (`_setup_toolbar` and all `_tb_*` widgets). All status information is now in the bottom status bar only: connection dot → "Connected/Disconnected" → broker name → account ID → feed dot → "Feed: Live/—" → (right) HH:MM:SS IST clock. The "+ Add Widget" button was already in View → Add Widget; it remains there. Removed `QToolButton` import and the now-unused `_sb_save_time` / `_sb_instruments` labels and `_update_save_time()` helper.
+
+---
+
 ## 2026-03-09 — Phase 8: Option Chain Widget
 
 ### Added

@@ -87,6 +87,18 @@ class BaseBroker(ABC):
         ...
 
     @abstractmethod
+    def get_quote(self, exchange: str, token: str) -> dict:
+        """Return a snapshot quote for a single instrument.
+
+        Returns a dict with at least:
+            ``ltp``        — last traded price (float)
+            ``prev_close`` — previous session's closing price (float)
+
+        Raises ``BrokerAPIError`` on failure.
+        """
+        ...
+
+    @abstractmethod
     def search_instruments(self, query: str) -> list[Instrument]:
         """Search instruments by name/symbol. Returns matching Instrument objects."""
         ...
