@@ -15,7 +15,6 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QTabWidget,
     QToolBar,
-    QToolButton,
     QWidget,
 )
 
@@ -97,7 +96,6 @@ class MainWindow(QMainWindow):
 
         # Build UI shell
         self._setup_menu()
-        self._setup_toolbar()
         self._setup_banner()
         self._setup_central_widget()
         self._setup_status_bar()
@@ -182,60 +180,6 @@ class MainWindow(QMainWindow):
                 )
                 cat_menu.addAction(action)
 
-    def _setup_toolbar(self) -> None:
-        tb = QToolBar("Main Toolbar", self)
-        tb.setMovable(False)
-        tb.setFloatable(False)
-        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, tb)
-
-        # Status dot
-        self._tb_dot = QLabel("●")
-        self._tb_dot.setStyleSheet("color: #f85149; font-size: 16px; padding: 0 6px;")
-        tb.addWidget(self._tb_dot)
-
-        # Broker / client labels
-        self._tb_status = QLabel("Disconnected")
-        self._tb_status.setStyleSheet("color: #8b949e; padding-right: 4px;")
-        tb.addWidget(self._tb_status)
-
-        self._tb_broker = QLabel("")
-        self._tb_broker.setStyleSheet("color: #8b949e;")
-        tb.addWidget(self._tb_broker)
-
-        self._tb_client = QLabel("")
-        self._tb_client.setStyleSheet("color: #8b949e;")
-        tb.addWidget(self._tb_client)
-
-        tb.addSeparator()
-
-        # Feed status dot + label
-        self._tb_feed_dot = QLabel("●")
-        self._tb_feed_dot.setStyleSheet("color: #484f58; font-size: 14px; padding: 0 4px;")
-        tb.addWidget(self._tb_feed_dot)
-
-        self._tb_feed_status = QLabel("Feed: —")
-        self._tb_feed_status.setStyleSheet("color: #484f58; padding-right: 4px; font-size: 12px;")
-        tb.addWidget(self._tb_feed_status)
-
-        tb.addSeparator()
-
-        # Market time (IST)
-        self._tb_time = QLabel("")
-        self._tb_time.setStyleSheet(
-            "color: #8b949e; font-family: 'Consolas', monospace; padding: 0 6px;"
-        )
-        tb.addWidget(self._tb_time)
-
-        tb.addSeparator()
-
-        # Add Widget button
-        self._tb_add_btn = QToolButton()
-        self._tb_add_btn.setText("＋ Add Widget")
-        self._tb_add_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        self._tb_add_btn.setMenu(self._add_widget_menu)
-        self._tb_add_btn.setEnabled(False)
-        tb.addWidget(self._tb_add_btn)
-
     def _setup_central_widget(self) -> None:
         # Zero-size dummy — dock widgets expand to fill all available space.
         central = QWidget()
@@ -247,7 +191,6 @@ class MainWindow(QMainWindow):
     def _setup_banner(self) -> None:
         # Disconnected banner lives as a secondary toolbar so it doesn't consume
         # any space once hidden (unlike a central-widget placeholder).
-        self.addToolBarBreak(Qt.ToolBarArea.TopToolBarArea)
         self._banner = QToolBar("Connection Banner", self)
         self._banner.setObjectName("ConnectionBanner")
         self._banner.setMovable(False)
@@ -274,30 +217,44 @@ class MainWindow(QMainWindow):
         sb = self.statusBar()
         sb.setSizeGripEnabled(False)
 
+        # Connection status dot
         self._sb_dot = QLabel("●")
-        self._sb_dot.setStyleSheet("color: #f85149; font-size: 13px; padding: 0 4px;")
+        self._sb_dot.setStyleSheet("color: #f85149; font-size: 13px; padding: 0 4px 0 6px;")
 
+        # "Connected" / "Disconnected"
         self._sb_conn = QLabel("Disconnected")
         self._sb_conn.setStyleSheet("color: #8b949e;")
 
+        # Broker name
         self._sb_broker = QLabel("")
         self._sb_broker.setStyleSheet("color: #8b949e;")
 
+        # Account ID
         self._sb_client = QLabel("")
         self._sb_client.setStyleSheet("color: #8b949e;")
 
-        self._sb_save_time = QLabel("")
-        self._sb_save_time.setStyleSheet("color: #484f58; padding-right: 8px; font-size: 11px;")
+        # Feed status dot
+        self._sb_feed_dot = QLabel("●")
+        self._sb_feed_dot.setStyleSheet("color: #484f58; font-size: 13px; padding: 0 4px 0 10px;")
 
-        self._sb_instruments = QLabel("")
-        self._sb_instruments.setStyleSheet("color: #484f58; padding-right: 12px; font-size: 11px;")
+        # "Feed: Live" / "Feed: —"
+        self._sb_feed_status = QLabel("Feed: —")
+        self._sb_feed_status.setStyleSheet("color: #484f58; font-size: 12px;")
 
         sb.addWidget(self._sb_dot)
         sb.addWidget(self._sb_conn)
         sb.addWidget(self._sb_broker)
         sb.addWidget(self._sb_client)
-        sb.addPermanentWidget(self._sb_instruments)
-        sb.addPermanentWidget(self._sb_save_time)
+        sb.addWidget(self._sb_feed_dot)
+        sb.addWidget(self._sb_feed_status)
+
+        # Clock — permanent widget so it sits flush at the far right
+        self._sb_time = QLabel("")
+        self._sb_time.setStyleSheet(
+            "color: #8b949e; font-family: 'Consolas', monospace;"
+            " padding: 0 10px 0 0; font-size: 12px;"
+        )
+        sb.addPermanentWidget(self._sb_time)
 
     # ------------------------------------------------------------------
     # Login / connection
@@ -322,13 +279,12 @@ class MainWindow(QMainWindow):
 
         self._banner.setVisible(False)
         self._disconnect_action.setEnabled(True)
-        self._tb_add_btn.setEnabled(True)
 
         self._set_connection_ui(connected=True, broker_name=broker_name, client_id=client_id)
 
         logger.info("Terminal connected: broker=%s client=%s", broker_name, client_id)
 
-        # Wire feed signals to toolbar indicators (connect once; QObject handles duplicate guards)
+        # Wire feed signals to status bar indicators (connect once)
         feed_signals = MarketFeed.instance().signals
         feed_signals.feed_connected.connect(self._on_feed_connected)
         feed_signals.feed_disconnected.connect(self._on_feed_disconnected)
@@ -369,7 +325,6 @@ class MainWindow(QMainWindow):
         AppState.set_connected(False)
         self._banner.setVisible(True)
         self._disconnect_action.setEnabled(False)
-        self._tb_add_btn.setEnabled(False)
         self._set_connection_ui(connected=False)
         self._set_feed_ui(connected=False)
         logger.info("Broker disconnected")
@@ -380,7 +335,6 @@ class MainWindow(QMainWindow):
 
     def _load_instrument_master(self) -> None:
         from broker.broker_manager import BrokerManager
-        self._sb_instruments.setText("Instruments: loading…")
         broker = BrokerManager.get_broker()
         self._im_worker = _InstrumentMasterWorker(broker, self)
         self._im_worker.finished.connect(self._on_im_loaded)
@@ -388,15 +342,13 @@ class MainWindow(QMainWindow):
         self._im_worker.start()
 
     def _on_im_loaded(self, count: int) -> None:
-        self._sb_instruments.setText(f"Instruments: {count:,}")
         logger.info("Instrument master loaded: %d records", count)
 
     def _on_im_error(self, msg: str) -> None:
-        self._sb_instruments.setText("Instruments: —")
         logger.warning("Instrument master load failed: %s", msg)
 
     # ------------------------------------------------------------------
-    # Feed status toolbar helpers
+    # Feed status helpers
     # ------------------------------------------------------------------
 
     def _on_feed_connected(self) -> None:
@@ -406,24 +358,20 @@ class MainWindow(QMainWindow):
         self._set_feed_ui(connected=False)
 
     def _on_feed_error(self, msg: str) -> None:
-        self._tb_feed_dot.setStyleSheet("color: #d29922; font-size: 14px; padding: 0 4px;")
+        self._sb_feed_dot.setStyleSheet("color: #d29922; font-size: 13px; padding: 0 4px 0 10px;")
         short = msg[:40] + "…" if len(msg) > 40 else msg
-        self._tb_feed_status.setText(f"Feed: {short}")
-        self._tb_feed_status.setStyleSheet("color: #d29922; padding-right: 4px; font-size: 12px;")
+        self._sb_feed_status.setText(f"Feed: {short}")
+        self._sb_feed_status.setStyleSheet("color: #d29922; font-size: 12px;")
 
     def _set_feed_ui(self, connected: bool) -> None:
         if connected:
-            self._tb_feed_dot.setStyleSheet("color: #3fb950; font-size: 14px; padding: 0 4px;")
-            self._tb_feed_status.setText("Feed: Live")
-            self._tb_feed_status.setStyleSheet(
-                "color: #3fb950; padding-right: 4px; font-size: 12px;"
-            )
+            self._sb_feed_dot.setStyleSheet("color: #3fb950; font-size: 13px; padding: 0 4px 0 10px;")
+            self._sb_feed_status.setText("Feed: Live")
+            self._sb_feed_status.setStyleSheet("color: #3fb950; font-size: 12px;")
         else:
-            self._tb_feed_dot.setStyleSheet("color: #484f58; font-size: 14px; padding: 0 4px;")
-            self._tb_feed_status.setText("Feed: —")
-            self._tb_feed_status.setStyleSheet(
-                "color: #484f58; padding-right: 4px; font-size: 12px;"
-            )
+            self._sb_feed_dot.setStyleSheet("color: #484f58; font-size: 13px; padding: 0 4px 0 10px;")
+            self._sb_feed_status.setText("Feed: —")
+            self._sb_feed_status.setStyleSheet("color: #484f58; font-size: 12px;")
 
     def _set_connection_ui(
         self,
@@ -432,27 +380,21 @@ class MainWindow(QMainWindow):
         client_id: str = "",
     ) -> None:
         if connected:
-            dot_style = "color: #3fb950; font-size: {size}px; padding: 0 {pad};"
+            dot_style = "color: #3fb950; font-size: 13px; padding: 0 4px 0 6px;"
             text = "Connected"
             text_style = "color: #3fb950;"
         else:
-            dot_style = "color: #f85149; font-size: {size}px; padding: 0 {pad};"
+            dot_style = "color: #f85149; font-size: 13px; padding: 0 4px 0 6px;"
             text = "Disconnected"
             text_style = "color: #8b949e;"
             broker_name = ""
             client_id = ""
 
-        self._tb_dot.setStyleSheet(dot_style.format(size=16, pad="6px"))
-        self._tb_status.setText(text)
-        self._tb_status.setStyleSheet(text_style)
-        self._tb_broker.setText(f"  {broker_name}" if broker_name else "")
-        self._tb_client.setText(f"  ·  {client_id}" if client_id else "")
-
-        self._sb_dot.setStyleSheet(dot_style.format(size=13, pad="4px"))
+        self._sb_dot.setStyleSheet(dot_style)
         self._sb_conn.setText(text)
         self._sb_conn.setStyleSheet(text_style)
-        self._sb_broker.setText(f"  |  {broker_name}" if broker_name else "")
-        self._sb_client.setText(f"  |  {client_id}" if client_id else "")
+        self._sb_broker.setText(f"  ·  {broker_name}" if broker_name else "")
+        self._sb_client.setText(f"  ·  {client_id}" if client_id else "")
 
     # ------------------------------------------------------------------
     # Widget management
@@ -591,14 +533,11 @@ class MainWindow(QMainWindow):
             logger.debug("No widgets to save")
             return
         LayoutManager.save(self, list(self._active_widgets.values()))
-        self._update_save_time()
 
     def _auto_save(self) -> None:
         if self._active_widgets:
             LayoutManager.save(self, list(self._active_widgets.values()))
-            n = len(self._active_widgets)
-            logger.info("Layout auto-saved (%d widgets)", n)
-            self._update_save_time()
+            logger.info("Layout auto-saved (%d widgets)", len(self._active_widgets))
 
     def _on_reset_layout(self) -> None:
         reply = QMessageBox.question(
@@ -626,17 +565,13 @@ class MainWindow(QMainWindow):
             self._load_default_layout()
         logger.info("Layout reset to default")
 
-    def _update_save_time(self) -> None:
-        now = datetime.now().strftime("%H:%M:%S")
-        self._sb_save_time.setText(f"Layout saved: {now}")
-
     # ------------------------------------------------------------------
     # Clock & About
     # ------------------------------------------------------------------
 
     def _update_clock(self) -> None:
         ist_now = datetime.now(tz=_IST)
-        self._tb_time.setText(ist_now.strftime("%H:%M:%S  IST"))
+        self._sb_time.setText(ist_now.strftime("%H:%M:%S  IST"))
 
     def _on_about(self) -> None:
         QMessageBox.about(

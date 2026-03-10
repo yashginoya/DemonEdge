@@ -2,6 +2,16 @@
 
 ---
 
+## 2026-03-10 — Fix: FeedStatusWidget shows Disconnected while ticks are flowing
+
+### Fixed
+- `widgets/feed_status/feed_status_widget.py` — Race condition: `MarketFeed.connect()` is called before layout restore, so the WebSocket handshake can complete and `feed_connected` can be emitted **before** `FeedStatusWidget` exists and connects to the signal. Qt captures connected slots at emission time, so `FeedStatusWidget` missed the one-time `feed_connected` event. Ticks then flowed (widget was connected by then), causing the contradiction of "Disconnected" status + incrementing tick count. Fixed by checking `MarketFeed.instance().is_connected` immediately after wiring signals and calling `_on_connected()` synchronously if already live. Also added the same sync in `on_show()` so state is correct whenever the widget is re-shown.
+
+### Architecture Decisions
+- The pattern "connect signals, then read current state to sync" is the correct way to handle one-shot lifecycle signals on widgets created after the event fires. Applied here and should be the template for any future widget that displays feed connection state.
+
+---
+
 ## 2026-03-10 — Fix: Watchlist REST snapshot populates LTP + prev_close after market hours
 
 ### Added

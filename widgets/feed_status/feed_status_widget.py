@@ -122,6 +122,14 @@ class FeedStatusWidget(BaseWidget):
         self._error_signal.connect(self._on_error)
         self._tick_signal.connect(self._on_tick)
 
+        # Sync initial state — the feed may have already connected before this
+        # widget was instantiated (race between WebSocket handshake and layout
+        # restore). Without this check the widget shows "Disconnected" even
+        # while ticks are flowing because it missed the one-time feed_connected
+        # emission that happened before it subscribed.
+        if MarketFeed.instance().is_connected:
+            self._on_connected()
+
     # ------------------------------------------------------------------
     # Slots
     # ------------------------------------------------------------------
@@ -162,6 +170,11 @@ class FeedStatusWidget(BaseWidget):
     # ------------------------------------------------------------------
 
     def on_show(self) -> None:
+        from feed.market_feed import MarketFeed
+        if MarketFeed.instance().is_connected:
+            self._on_connected()
+        else:
+            self._on_disconnected()
         self._update_subs()
 
     def on_hide(self) -> None:
