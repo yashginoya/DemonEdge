@@ -155,11 +155,11 @@ class FeedStatusWidget(BaseWidget):
         self._tick_count_window += 1
         self._last_tick_time = datetime.now()
         self._last_tick_label.setText(self._last_tick_time.strftime("%H:%M:%S.%f")[:-3])
-        self._update_subs()
 
     def _flush_tps(self) -> None:
         self._tps_label.setText(str(self._tick_count_window))
         self._tick_count_window = 0
+        self._update_subs()  # once per second is enough
 
     def _update_subs(self) -> None:
         from feed.market_feed import MarketFeed
