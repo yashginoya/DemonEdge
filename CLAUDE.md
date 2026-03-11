@@ -132,6 +132,8 @@ The only git-related actions Claude may take without being asked are read-only s
 
 If Claude thinks something is worth committing (e.g. after completing a phase), it should say: "This looks like a good point to commit — let me know if you'd like me to stage and commit the changes." Then wait for explicit confirmation before touching git.
 
+**Commit Messages**: Never add `Co-Authored-By`, `Co-authored-by`, or any similar trailer lines to commit messages. Commit messages must contain only the subject line and optional body — no attribution footers of any kind.
+
 ---
 
 ### Adding a New Widget
