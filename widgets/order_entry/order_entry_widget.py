@@ -97,6 +97,7 @@ class OrderEntryWidget(BaseWidget):
         self._status_timer.timeout.connect(lambda: self._set_status("", ""))
 
         self._worker: _PlaceOrderWorker | None = None
+        self._pending_order_params: dict = {}   # captured at placement time for popup
 
     # ------------------------------------------------------------------
     # Public API (called by MainWindow / other widgets)
@@ -180,6 +181,9 @@ class OrderEntryWidget(BaseWidget):
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
 
+        # Capture params now so success/failure handlers can read them for the popup
+        self._pending_order_params = order_params
+
         # Disable button, show placing status
         self._form.set_place_btn_enabled(False)
         self._form.set_place_btn_text("Placing…")
@@ -201,12 +205,33 @@ class OrderEntryWidget(BaseWidget):
         self.order_placed.emit(order_id)
         logger.info("Order placed successfully: %s", order_id)
 
+        # Toast notification
+        from widgets.order_entry.order_notification_popup import OrderNotificationPopup
+        p = self._pending_order_params
+        OrderNotificationPopup.show_success(
+            symbol=p.get("tradingsymbol", ""),
+            order_type=p.get("ordertype", ""),
+            product_type=p.get("producttype", ""),
+            side=p.get("transactiontype", ""),
+            qty=p.get("quantity", ""),
+            price=p.get("price", 0),
+            order_id=order_id,
+        )
+
     def _on_order_failed(self, error: str) -> None:
         self._form.set_place_btn_enabled(True)
         self._form.set_place_btn_text("PLACE ORDER")
         self._set_status(f"✗ Failed: {error}", "#f85149")
         self._status_timer.start(10_000)
         logger.error("Order placement failed: %s", error)
+
+        # Toast notification
+        from widgets.order_entry.order_notification_popup import OrderNotificationPopup
+        p = self._pending_order_params
+        OrderNotificationPopup.show_failure(
+            symbol=p.get("tradingsymbol", ""),
+            error=error,
+        )
 
     def _set_status(self, text: str, color: str) -> None:
         self._status.setText(text)

@@ -2,6 +2,21 @@
 
 ---
 
+## 2026-03-11 — feat: Order placement toast notification popup
+
+### Added
+- `widgets/order_entry/order_notification_popup.py` — New `OrderNotificationPopup` class. A frameless, non-blocking QWidget toast that appears bottom-right of the primary screen. Three factory methods: `show_success(...)`, `show_failure(...)`, `show_pending(...)`. Auto-dismisses after 5 s with a visible countdown; also closes on click or Enter/Escape. Multiple popups stack vertically without overlapping. No taskbar entry (`Qt.WindowType.Tool`). Styled with a 4px colored left border (green/red/amber) on a dark `#1c2128` background with rounded corners and a drop shadow. Fully reusable — callable from any code that places orders, not hardcoded to the Order Entry widget.
+
+### Changed
+- `widgets/order_entry/order_entry_widget.py` — `_on_place_requested` now stores `order_params` into `self._pending_order_params` before launching the worker, so the success/failure handlers have access to symbol, order type, product type, side, qty, and price without re-querying the form. `_on_order_success` and `_on_order_failed` each call the appropriate `OrderNotificationPopup` factory after updating the existing status bar.
+
+### Architecture Decisions
+- Popup is a `QWidget` (not `QDialog`) with `FramelessWindowHint` + `WA_TranslucentBackground` so the rounded corners and drop shadow render correctly on Windows. `QDialog.show()` would also work but QWidget avoids dialog-specific focus-stealing behavior.
+- `OrderNotificationPopup._active` is a class-level list (not a singleton manager) — simple enough for the stacking use case and avoids over-engineering. Stacking is positional (new popup anchors above existing ones); existing popups do not animate/slide when a peer is dismissed.
+- Params are captured in `_pending_order_params` at placement time rather than reading form fields in the result handler, since the user may have modified the form while the order was in-flight.
+
+---
+
 ## 2026-03-11 — fix: Option Chain OI Chg showing garbage + display in Lakhs
 
 ### Fixed
