@@ -1,5 +1,17 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
+
+
+@dataclass
+class DepthLevel:
+    """One price level in the 5-level market depth (best-5 data).
+
+    Prices are in rupees (converted from paise on parse).
+    """
+
+    price: float
+    quantity: int
+    orders: int  # number of orders stacked at this price level
 
 
 @dataclass
@@ -35,3 +47,14 @@ class Tick:
     # does not contain a usable absolute OI change value and is intentionally omitted.
     # OI change is computed per-widget as a delta from the first tick seen after load.
     open_interest: int | None = None
+
+    # Market depth — 5 levels each side (SNAP_QUOTE only)
+    depth_buy: list[DepthLevel] = field(default_factory=list)
+    depth_sell: list[DepthLevel] = field(default_factory=list)
+
+    # Additional SNAP_QUOTE-only scalar fields
+    last_traded_time: datetime | None = None
+    upper_circuit_limit: float | None = None
+    lower_circuit_limit: float | None = None
+    week_52_high: float | None = None
+    week_52_low: float | None = None

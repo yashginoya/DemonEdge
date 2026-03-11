@@ -2,6 +2,29 @@
 
 ---
 
+## 2026-03-11 — feat: Market Depth & Quote widget (F5)
+
+### Added
+- `widgets/market_depth/market_depth_widget.py` — New `MarketDepthWidget` (BaseWidget subclass, `widget_id = "market_depth"`). Subscribes to SNAP_QUOTE mode (mode 3) on Angel One WebSocket for the selected symbol. Layout (top → bottom): symbol search bar (opens existing `SearchDialog` on click), LTP header (large price, green/red change + change%), 5-level order book table (bids left in green, asks right in red), bid/ask ratio bar (green/red proportional fill), total quantity summary row, divider, scrollable quote detail grid. Quote grid shows: Open, High, Low, Prev Close, Avg Price, Volume, OI, LTQ, LTT, LCL, UCL, 52W High, 52W Low. Unsubscribes previous token when symbol changes. State persisted via `save_state`/`restore_state` (saves full Instrument fields). Registered in `WidgetRegistry` with description "Live 5-level order book with full quote and circuit limits".
+- `widgets/market_depth/__init__.py` — Package init; imports widget to trigger self-registration.
+- `_DepthTable` (inner class) — `QTableWidget` 5 rows × 6 cols. Bid columns right-aligned green, ask columns left-aligned red. Column widths: qty columns stretch, orders/price columns fixed.
+- `_RatioBar` (inner class) — `QProgressBar` styled green chunk (bid) / red background (ask), 6px height.
+- `_QuoteGrid` (inner class) — 4-column `QGridLayout` with muted grey labels and monospace white values for all SNAP_QUOTE quote fields.
+
+### Changed
+- `models/tick.py` — Added `DepthLevel` dataclass (`price: float`, `quantity: int`, `orders: int`). Added to `Tick`: `depth_buy: list[DepthLevel]`, `depth_sell: list[DepthLevel]` (default empty list), `last_traded_time: datetime | None`, `upper_circuit_limit: float | None`, `lower_circuit_limit: float | None`, `week_52_high: float | None`, `week_52_low: float | None`. All new Tick fields are None/empty by default — fully backward-compatible with existing LTP and QUOTE subscribers.
+- `feed/market_feed.py` — `_parse_tick()` now extracts all new SNAP_QUOTE fields: `upper_circuit_limit`, `lower_circuit_limit`, `52_week_high_price`, `52_week_low_price` (all paise → rupees), `last_traded_timestamp` (seconds epoch → datetime), `best_5_buy_data` / `best_5_sell_data` (lists of dicts → `list[DepthLevel]` with paise→rupees conversion). Imported `DepthLevel` from `models.tick`.
+- `app/main_window.py` — Added `import widgets.market_depth` to trigger self-registration. Added `("F5", lambda: self.spawn_widget("market_depth"))` to `_register_shortcuts()`.
+- `app/shortcuts_dialog.py` — Added `("New Market Depth", "F5")` to Widgets section of `_SECTIONS`. Window height bumped 370 → 390px.
+
+### Architecture Decisions
+- Depth data is parsed in SNAP_QUOTE mode only — no separate DEPTH mode (mode 4) subscription needed for 5-level data; Angel One sends best_5 arrays in SNAP_QUOTE packets.
+- `depth_buy`/`depth_sell` default to empty list (not None) so callers can always iterate without None checks.
+- All new Tick fields are additive and default to None/empty — no changes to existing Watchlist, Option Chain, or any other SNAP_QUOTE subscriber.
+- Widget uses `_unsubscribe_all_feeds()` + immediate `subscribe_feed()` on instrument change rather than waiting for `on_show()`, so data starts arriving even if triggered while the widget is already visible.
+
+---
+
 ## 2026-03-11 — fix: Change Keyboard Shortcuts shortcut from Ctrl+? to Ctrl+/
 
 ### Changed

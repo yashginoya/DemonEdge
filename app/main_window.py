@@ -35,6 +35,7 @@ import widgets.order_entry.order_entry_widget  # noqa: F401
 import widgets.positions.positions_widget  # noqa: F401
 import widgets.feed_status.feed_status_widget  # noqa: F401
 import widgets.option_chain  # noqa: F401
+import widgets.market_depth  # noqa: F401
 
 from widgets.log_viewer.log_viewer_widget import LogViewerWindow
 
@@ -790,6 +791,7 @@ class MainWindow(QMainWindow):
             ("Ctrl+O", lambda: self.spawn_widget("option_chain")),
             ("Ctrl+P", lambda: self.spawn_widget("positions")),
             ("Ctrl+L", self._toggle_log_viewer),
+            ("F5", lambda: self.spawn_widget("market_depth")),
             # General
             ("Ctrl+K", self._toggle_command_palette),
             ("Ctrl+Shift+S", self._save_layout),

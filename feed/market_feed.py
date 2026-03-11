@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Callable
 
 from feed.feed_models import SubscriptionMode, exchange_str_to_type, exchange_type_to_str
-from models.tick import Tick
+from models.tick import DepthLevel, Tick
 from utils.logger import get_logger
 
 if TYPE_CHECKING:
@@ -290,13 +290,54 @@ class _MarketFeed:
                 low_p = int(data.get("low_price_of_the_day", 0)) / 100.0
                 # close_p already parsed above
 
-            # SNAP_QUOTE-only: Open Interest (raw int64, no paise conversion).
-            # The companion open_interest_change_percentage field from Angel's binary
-            # packet is not a usable absolute OI change value and is not parsed.
+            # SNAP_QUOTE-only fields
             oi = None
+            depth_buy: list[DepthLevel] = []
+            depth_sell: list[DepthLevel] = []
+            ltt = ucl = lcl = w52h = w52l = None
+
             if mode == SubscriptionMode.SNAP_QUOTE:
+                # Open Interest (raw int64, no paise conversion).
+                # The companion open_interest_change_percentage field from Angel's
+                # binary packet is not a usable absolute OI change value and is
+                # intentionally not parsed.
                 _oi = int(data.get("open_interest", 0))
                 oi = _oi if _oi > 0 else None
+
+                # Circuit limits and 52-week range (paise → rupees)
+                _ucl = int(data.get("upper_circuit_limit", 0))
+                ucl = _ucl / 100.0 if _ucl > 0 else None
+                _lcl = int(data.get("lower_circuit_limit", 0))
+                lcl = _lcl / 100.0 if _lcl > 0 else None
+                _w52h = int(data.get("52_week_high_price", 0))
+                w52h = _w52h / 100.0 if _w52h > 0 else None
+                _w52l = int(data.get("52_week_low_price", 0))
+                w52l = _w52l / 100.0 if _w52l > 0 else None
+
+                # Last traded timestamp (Angel sends seconds since epoch)
+                _ltt_raw = data.get("last_traded_timestamp")
+                if _ltt_raw:
+                    try:
+                        ltt = datetime.fromtimestamp(int(_ltt_raw))
+                    except Exception:
+                        pass
+
+                # 5-level market depth (prices in paise → rupees)
+                def _parse_depth(levels: list) -> list[DepthLevel]:
+                    result = []
+                    for lvl in (levels or []):
+                        try:
+                            result.append(DepthLevel(
+                                price=int(lvl.get("price", 0)) / 100.0,
+                                quantity=int(lvl.get("quantity", 0)),
+                                orders=int(lvl.get("num_of_orders", 0)),
+                            ))
+                        except Exception:
+                            pass
+                    return result
+
+                depth_buy = _parse_depth(data.get("best_5_buy_data") or [])
+                depth_sell = _parse_depth(data.get("best_5_sell_data") or [])
 
             return Tick(
                 token=token,
@@ -315,6 +356,13 @@ class _MarketFeed:
                 low=low_p,
                 close=close_p,
                 open_interest=oi,
+                depth_buy=depth_buy,
+                depth_sell=depth_sell,
+                last_traded_time=ltt,
+                upper_circuit_limit=ucl,
+                lower_circuit_limit=lcl,
+                week_52_high=w52h,
+                week_52_low=w52l,
             )
         except Exception:
             logger.exception("MarketFeed._parse_tick failed for data: %s", data)

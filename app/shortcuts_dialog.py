@@ -31,6 +31,7 @@ _SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
             ("New Option Chain", "Ctrl+O"),
             ("New Positions & P&L", "Ctrl+P"),
             ("Open Log Viewer", "Ctrl+L"),
+            ("New Market Depth", "F5"),
         ],
     ),
     (
@@ -124,7 +125,7 @@ class KeyboardShortcutsWindow(QWidget):
         # No parent → independent OS window; Qt.Window gives it a title bar.
         super().__init__(None, Qt.WindowType.Window)
         self.setWindowTitle("Keyboard Shortcuts")
-        self.setFixedSize(400, 370)
+        self.setFixedSize(400, 390)
         self.setStyleSheet(_WINDOW_QSS)
         self._build_ui()
 
