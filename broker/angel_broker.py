@@ -360,7 +360,7 @@ class AngelBroker(BaseBroker):
         """Return margin required for an order in rupees.
 
         Calls Angel SmartAPI ``getMarginApi()`` (batch endpoint).
-        Wraps ``margin_params`` in ``{"orders": [margin_params]}`` as required
+        Wraps ``margin_params`` in ``{"positions": [margin_params]}`` as required
         by the API.  The response ``data`` field is a list; we read the first
         element and extract the margin value.
         Raises ``BrokerAPIError`` on failure.
@@ -368,37 +368,25 @@ class AngelBroker(BaseBroker):
         self._require_connection()
         try:
             # --- Pre-call normalisation ---
-            # Work on a copy so the caller's dict is not mutated
+            # Work on a copy so the caller's dict is not mutated.
+            # Angel margin/v1/batch field names differ from placeOrder:
+            #   token, tradeType, productType (camelCase), qty (int), price (float)
             params = dict(margin_params)
 
-            variety = params.get("variety", "NORMAL")
-            product = params.get("producttype", "")
-
-            # BRACKET/ROBO (BO) is only legal with INTRADAY
-            if variety in ("ROBO", "BO") and product != "INTRADAY":
-                logger.debug(
-                    "get_order_margin: skipping — BRACKET/ROBO requires INTRADAY (got %s)", product
-                )
-                return 0.0
-
-            # MARKET orders must send price "0" (not "0.0")
-            if params.get("ordertype") == "MARKET":
-                params["price"] = "0"
-            else:
-                # Ensure price is a clean decimal string
-                try:
-                    params["price"] = f"{float(params.get('price', '0')):.2f}"
-                except (ValueError, TypeError):
-                    params["price"] = "0"
-
-            # Quantity must be a plain integer string
+            # qty must be a plain integer
             try:
-                params["quantity"] = str(int(float(params.get("quantity", "0"))))
+                params["qty"] = int(float(params.get("qty", 0)))
             except (ValueError, TypeError):
-                pass
+                params["qty"] = 0
+
+            # price must be a float (0.0 for market orders)
+            try:
+                params["price"] = float(params.get("price", 0.0))
+            except (ValueError, TypeError):
+                params["price"] = 0.0
 
             logger.debug("get_order_margin: sending params=%s", params)
-            resp = self._smart.getMarginApi({"orders": [params]})
+            resp = self._smart.getMarginApi({"positions": [params]})
             logger.debug("get_order_margin: raw response=%s", resp)
 
             if not resp:

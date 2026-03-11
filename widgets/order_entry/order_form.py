@@ -265,8 +265,12 @@ class OrderForm(QWidget):
     # ------------------------------------------------------------------
 
     def _get_margin_params(self) -> dict | None:
-        """Build the margin params dict from current form state.  Returns None if
-        the form is not in a state where a margin estimate makes sense."""
+        """Build the margin params dict for Angel's margin/v1/batch API.
+
+        The margin endpoint uses different field names from placeOrder:
+        token, tradeType, productType (camelCase), qty (int), price (float).
+        Only the fields the margin API actually needs are included.
+        """
         inst = self._instrument
         if inst is None:
             return None
@@ -274,34 +278,28 @@ class OrderForm(QWidget):
         if qty <= 0:
             return None
 
-        order_type   = self._get_selected(self._ot_group)
         product_type = self._get_selected(self._prod_group)
         variety      = self._get_selected(self._var_group)
 
-        ot_map = {
-            "MARKET": "MARKET",
-            "LIMIT":  "LIMIT",
-            "SL":     "STOPLOSS",
-            "SL-M":   "STOPLOSS_MARKET",
-        }
-        variety_map = {"NORMAL": "NORMAL", "BRACKET": "ROBO"}
+        # Bracket orders use "BO" as productType in the margin API
+        margin_product_type = "BO" if variety == "BRACKET" else product_type
 
-        price = (
-            self._price_spin.value()
-            if self._price_spin.isEnabled()
-            else 0.0
-        )
+        if self._price_spin.isEnabled():
+            price = self._price_spin.value()
+        elif self._current_ltp > 0:
+            # MARKET order — use current LTP as price estimate so the margin
+            # calculator can compute a non-zero result (price × qty × rate)
+            price = self._current_ltp
+        else:
+            price = 0.0
 
         return {
-            "exchange":        inst.exchange,
-            "tradingsymbol":   inst.symbol,
-            "symboltoken":     inst.token,
-            "transactiontype": self._side,
-            "ordertype":       ot_map.get(order_type, "MARKET"),
-            "producttype":     product_type,
-            "variety":         variety_map.get(variety, "NORMAL"),
-            "quantity":        str(qty),
-            "price":           str(price),
+            "exchange":    inst.exchange,
+            "token":       inst.token,
+            "tradeType":   self._side,
+            "productType": margin_product_type,
+            "qty":         qty,
+            "price":       price,
         }
 
     def _schedule_margin_fetch(self) -> None:

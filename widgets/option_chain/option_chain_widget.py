@@ -284,6 +284,12 @@ class OptionChainWidget(BaseWidget):
         self._ce_token_strike: dict[str, float] = {}
         self._pe_token_strike: dict[str, float] = {}
 
+        # OI baseline per token: first OI seen after chain load.
+        # OI Chg = current_oi - baseline_oi (intraday delta).
+        # open_interest_change_percentage from Angel's binary feed is not
+        # a usable absolute change value, so we compute it ourselves.
+        self._oi_baseline: dict[str, int] = {}
+
         self._model = OptionChainModel()
 
         self._build_ui()
@@ -561,6 +567,10 @@ class OptionChainWidget(BaseWidget):
         self._rows            = rows          # full strike list for the expiry
         self._underlying_exchange = underlying_exchange
 
+        # Reset OI baseline so the first tick for each token after a chain
+        # reload becomes the new reference point for OI Chg calculation.
+        self._oi_baseline.clear()
+
         # Build token→strike lookup over full row set (subscribed subset is smaller
         # but having extra entries is harmless — only subscribed tokens send ticks)
         self._ce_token_strike = {r.ce_token: r.strike for r in rows if r.ce_token}
@@ -692,10 +702,19 @@ class OptionChainWidget(BaseWidget):
     # ------------------------------------------------------------------
 
     def _on_tick_ui(self, tick: Tick, side: str) -> None:
-        ltp       = tick.ltp
-        volume    = tick.volume or 0
-        oi        = tick.open_interest or 0
-        oi_change = tick.open_interest_change or 0
+        ltp    = tick.ltp
+        volume = tick.volume or 0
+        oi     = tick.open_interest or 0
+
+        # Compute OI change as delta from the first tick seen after chain load.
+        # Angel One's open_interest_change_percentage binary field does not
+        # contain a usable absolute OI change value, so we derive it ourselves.
+        if oi > 0:
+            if tick.token not in self._oi_baseline:
+                self._oi_baseline[tick.token] = oi
+            oi_change = oi - self._oi_baseline[tick.token]
+        else:
+            oi_change = 0
 
         T = self._time_to_expiry()
 

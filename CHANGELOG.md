@@ -2,6 +2,34 @@
 
 ---
 
+## 2026-03-11 — fix: Option Chain OI Chg showing garbage + display in Lakhs
+
+### Fixed
+- `widgets/option_chain/option_chain_widget.py` — Stopped using `tick.open_interest_change` (Angel One's `open_interest_change_percentage` binary field is not an absolute OI count — it produces values in the 10^15 range). Added `self._oi_baseline: dict[str, int]` — the first OI tick per token after a chain load becomes the baseline. OI Chg = `current_oi - baseline_oi` (intraday delta). Baseline is cleared in `_on_chain_ready()` so every reload starts fresh.
+- `models/tick.py` — Removed `open_interest_change` field; left `open_interest` only. Added comment documenting why the change field is omitted.
+- `feed/market_feed.py` — Removed parsing of `open_interest_change_percentage`; only `open_interest` is extracted from SNAP_QUOTE ticks.
+- `widgets/option_chain/option_chain_model.py` — OI Chg column labels changed from `"OI Chg"` to `"OI Chg (L)"`. Column width increased from 80 to 90px. Display format already correct: `oi_change / 1_00_000` with `L` suffix.
+
+### Architecture Decisions
+- Angel One's `open_interest_change_percentage` int64 field at byte offset 139–147 of the SNAP_QUOTE binary packet does not contain a usable absolute OI change value (values seen in production are in the 10^15 range). Computing OI change as an intraday delta from the first tick is the correct approach and is consistent with how most Indian trading terminals display OI Chg.
+
+---
+
+## 2026-03-11 — fix: Order Entry margin fetch always failing with API error
+
+### Fixed
+- `widgets/order_entry/order_form.py` — `_get_margin_params()` was building a dict using placeOrder field names (`symboltoken`, `transactiontype`, `producttype`, `quantity` as string). Angel's `margin/v1/batch` endpoint uses a completely different schema. Replaced with correct fields: `token`, `tradeType`, `productType` (camelCase), `qty` (int), `price` (float). Bracket variety now maps to `productType = "BO"`. MARKET orders now pass the current LTP as price (instead of 0.0) so the API can compute a non-zero margin (margin = price × qty × rate; with price=0 the API correctly returns 0).
+- `broker/angel_broker.py` — top-level wrapper key changed from `"orders"` to `"positions"` (per the API spec: `{"positions": [...]}`). Normalisation updated to sanitise `qty` (int) and `price` (float) using the new field names.
+- `tests/test_margin_manual.py` — added standalone test script. Verified live: HDFCBANK NSE token 1333, 1 share INTRADAY BUY at Rs 1800 → API returns `totalMarginRequired: 360.0` (20% intraday margin).
+
+### Diagnosis
+Three compounding bugs:
+1. **Wrong field names**: `quantity` / `symboltoken` / `transactiontype` / `producttype` — the margin API uses `qty` / `token` / `tradeType` / `productType`.
+2. **Wrong wrapper key**: `{"orders": [...]}` — the API requires `{"positions": [...]}`, causing `AB4033 Invalid Request` on every call.
+3. **Zero price for MARKET orders**: price=0.0 causes the API to return margin=0 for equity (margin is price-based). Fixed by falling back to `_current_ltp` when the price field is disabled.
+
+---
+
 ## 2026-03-11 — fix: Option Chain OI and OI Chg columns always showing —
 
 ### Fixed

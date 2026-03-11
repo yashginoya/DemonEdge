@@ -290,15 +290,13 @@ class _MarketFeed:
                 low_p = int(data.get("low_price_of_the_day", 0)) / 100.0
                 # close_p already parsed above
 
-            # SNAP_QUOTE-only: Open Interest fields (raw int64, no paise conversion)
-            oi = oi_chg = None
+            # SNAP_QUOTE-only: Open Interest (raw int64, no paise conversion).
+            # The companion open_interest_change_percentage field from Angel's binary
+            # packet is not a usable absolute OI change value and is not parsed.
+            oi = None
             if mode == SubscriptionMode.SNAP_QUOTE:
                 _oi = int(data.get("open_interest", 0))
                 oi = _oi if _oi > 0 else None
-                # The library names this "open_interest_change_percentage" but it is
-                # stored as int64 — it is the absolute OI change from the previous day.
-                _oi_chg = int(data.get("open_interest_change_percentage", 0))
-                oi_chg = _oi_chg if _oi_chg != 0 else None
 
             return Tick(
                 token=token,
@@ -317,7 +315,6 @@ class _MarketFeed:
                 low=low_p,
                 close=close_p,
                 open_interest=oi,
-                open_interest_change=oi_chg,
             )
         except Exception:
             logger.exception("MarketFeed._parse_tick failed for data: %s", data)

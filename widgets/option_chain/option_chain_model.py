@@ -24,7 +24,7 @@ class ColumnDef:
 
 ALL_COLUMNS: list[ColumnDef] = [
     ColumnDef("ce_oi",      "OI",     "CE",     True,  90),
-    ColumnDef("ce_oi_chg",  "OI Chg", "CE",     True,  80),
+    ColumnDef("ce_oi_chg",  "OI Chg (L)", "CE",     True,  90),
     ColumnDef("ce_volume",  "Volume", "CE",     False, 80),
     ColumnDef("ce_iv",      "IV",     "CE",     True,  65),
     ColumnDef("ce_delta",   "Delta",  "CE",     False, 65),
@@ -34,7 +34,7 @@ ALL_COLUMNS: list[ColumnDef] = [
     ColumnDef("pe_delta",   "Delta",  "PE",     False, 65),
     ColumnDef("pe_iv",      "IV",     "PE",     True,  65),
     ColumnDef("pe_volume",  "Volume", "PE",     False, 80),
-    ColumnDef("pe_oi_chg",  "OI Chg", "PE",     True,  80),
+    ColumnDef("pe_oi_chg",  "OI Chg (L)", "PE",     True,  90),
     ColumnDef("pe_oi",      "OI",     "PE",     True,  90),
 ]
 
@@ -240,7 +240,8 @@ class OptionChainModel(QAbstractTableModel):
         if key == "ce_oi_chg":
             if not row.ce_oi_change:
                 return "—"
-            return f"+{row.ce_oi_change:,}" if row.ce_oi_change > 0 else f"{row.ce_oi_change:,}"
+            v = row.ce_oi_change / 1_00_000
+            return f"+{v:.2f}L" if row.ce_oi_change > 0 else f"{v:.2f}L"
         if key == "ce_iv":
             return f"{row.ce_iv:.2f}%" if row.ce_iv else "—"
         if key == "ce_delta":
@@ -256,7 +257,8 @@ class OptionChainModel(QAbstractTableModel):
         if key == "pe_oi_chg":
             if not row.pe_oi_change:
                 return "—"
-            return f"+{row.pe_oi_change:,}" if row.pe_oi_change > 0 else f"{row.pe_oi_change:,}"
+            v = row.pe_oi_change / 1_00_000
+            return f"+{v:.2f}L" if row.pe_oi_change > 0 else f"{v:.2f}L"
         if key == "pe_iv":
             return f"{row.pe_iv:.2f}%" if row.pe_iv else "—"
         if key == "pe_delta":

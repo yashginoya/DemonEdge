@@ -30,10 +30,8 @@ class Tick:
     close: float | None = None
 
     # SNAP_QUOTE-only fields — None in LTP / QUOTE mode
-    # open_interest: current OI in contracts (raw int64 from Angel One binary protocol)
-    # open_interest_change: change from previous day's OI in contracts (raw int64;
-    #   the SmartWebSocketV2 library names this field "open_interest_change_percentage"
-    #   but it is stored as int64 — it represents the absolute contract count change,
-    #   not a percentage)
+    # open_interest: current OI as reported by Angel One binary protocol (raw int64).
+    # The companion "open_interest_change_percentage" field from the binary packet
+    # does not contain a usable absolute OI change value and is intentionally omitted.
+    # OI change is computed per-widget as a delta from the first tick seen after load.
     open_interest: int | None = None
-    open_interest_change: int | None = None
