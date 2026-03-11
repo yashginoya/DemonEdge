@@ -194,7 +194,7 @@ class LoginWindow(QDialog):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Connect to Broker")
+        self.setWindowTitle("DemonEdge - Connect to Broker")
         self.setFixedWidth(440)
         self.setModal(True)
         self.setStyleSheet(_QSS)
@@ -223,7 +223,7 @@ class LoginWindow(QDialog):
         outer.setSpacing(0)
 
         # Title row
-        title = QLabel("Trading Terminal")
+        title = QLabel("DemonEdge")
         title.setObjectName("title")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         outer.addWidget(title)

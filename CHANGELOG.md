@@ -2,6 +2,123 @@
 
 ---
 
+## 2026-03-11 — fix: Remove "DemonEdge - " prefix from QDialog titles
+
+### Changed
+- `widgets/order_entry/order_confirmation_dialog.py` — `"DemonEdge - Confirm Order"` → `"Confirm Order"`.
+- `widgets/option_chain/column_selector_dialog.py` — `"DemonEdge - Column Visibility"` → `"Column Visibility"`.
+- `widgets/option_chain/option_chain_widget.py` — `_StrikesSettingsDialog`: `"DemonEdge - Strike Settings"` → `"Strike Settings"`.
+- `widgets/watchlist/add_manual_dialog.py` — `"DemonEdge - Add by Token"` → `"Add by Token"`.
+- `widgets/watchlist/search_dialog.py` — `"DemonEdge - Add Instrument"` → `"Add Instrument"`.
+- `CLAUDE.md` — Window Title Convention rule updated to explicitly distinguish standalone windows (keep `"DemonEdge - "` prefix) from `QDialog` subclasses (short descriptive title only, no prefix).
+
+### Architecture Decisions
+- Standalone windows (`QWidget` with `Qt.WindowType.Window`, `QMainWindow`) get the `"DemonEdge - "` prefix because they appear in the OS taskbar/window list and need the app name for context.
+- `QDialog` subclasses omit the prefix — they are always modal/parented to a window and their title is already contextual.
+
+---
+
+## 2026-03-11 — chore: Rename app to DemonEdge + window title convention
+
+### Changed
+- `app/main_window.py` — `setWindowTitle("DemonEdge")`; About dialog updated to "About DemonEdge" / "<b>DemonEdge</b>".
+- `main.py` — `app.setApplicationName("DemonEdge")`; startup log message updated to `"DemonEdge starting…"`.
+- `app/login_window.py` — `setWindowTitle("DemonEdge - Connect to Broker")`; title `QLabel` text changed to `"DemonEdge"`.
+- `widgets/log_viewer/log_viewer_widget.py` — `setWindowTitle("DemonEdge - Log Viewer")`.
+- `widgets/option_chain/option_chain_widget.py` — `_StrikesSettingsDialog.setWindowTitle("DemonEdge - Strike Settings")`.
+- `widgets/option_chain/column_selector_dialog.py` — `setWindowTitle("DemonEdge - Column Visibility")`.
+- `widgets/order_entry/order_confirmation_dialog.py` — `setWindowTitle("DemonEdge - Confirm Order")`.
+- `widgets/watchlist/add_manual_dialog.py` — `setWindowTitle("DemonEdge - Add by Token")`.
+- `widgets/watchlist/search_dialog.py` — `setWindowTitle("DemonEdge - Add Instrument")`.
+- `CLAUDE.md` — Added **Naming Conventions** section under Development Rules, documenting the `"DemonEdge - <Window Name>"` title format as a mandatory convention for all future windows and dialogs.
+
+### Architecture Decisions
+- The `"DemonEdge - <Name>"` prefix is the enforced standard for all secondary windows. The main window bears only `"DemonEdge"` with no suffix.
+
+---
+
+## 2026-03-11 — refactor: Log Viewer promoted to standalone window
+
+### Changed
+- `widgets/log_viewer/log_viewer_widget.py` — `LogViewerWidget(BaseWidget)` → `LogViewerWindow(QWidget)`. Class no longer inherits `BaseWidget` or registers with `WidgetRegistry`. Constructed with `Qt.WindowType.Window` and `parent=None` so it is fully independent. Default size 1000×600. `closeEvent` overridden to `event.ignore(); self.hide()` so the instance persists and buffers logs while hidden. `showEvent` emits `visibility_changed(True)`; `closeEvent` emits `visibility_changed(False)`. Removed `on_show`, `on_hide`, `save_state`, `restore_state` and the `WidgetRegistry.register()` call. All internal tab/filter/export logic is unchanged.
+- `widgets/log_viewer/__init__.py` — updated docstring; import retained so the module loads when needed.
+- `app/main_window.py` — replaced `import widgets.log_viewer` with `from widgets.log_viewer.log_viewer_widget import LogViewerWindow`. Added `QPushButton` to Qt imports. Added `self._sb_logs_btn` ("Logs") flat button in the status bar between the Feed status and the clock. Created `self._log_viewer_window = LogViewerWindow()` once in `__init__`; connected its `visibility_changed` to `_update_logs_btn_style()`. `_toggle_log_viewer()` shows/hides the window and positions it relative to the main window on first open. `_update_logs_btn_style()` colors the button `#58a6ff` (accent) when open, `#8b949e` (muted) when closed. `closeEvent` now calls `self._log_viewer_window.hide()` before accepting so the window doesn't outlive the terminal.
+
+### Architecture Decisions
+- `LogViewerWindow` keeps `parent=None` so it is fully independent and does not minimize or hide with the main window.
+- The instance is never destroyed — `closeEvent` only hides it, keeping the 5 000-record buffer intact.
+- `MainWindow.closeEvent` calls `hide()` (not `close()`) on the log viewer so it doesn't fight with the `event.ignore()` override.
+- Old `layout.json` files referencing `"widget_id": "log_viewer"` are silently skipped by `LayoutManager.restore()` via the existing `KeyError` handler — no crash, no migration needed.
+
+---
+
+## 2026-03-11 — fix: Strike Settings dialog UI polish
+
+### Changed
+- `widgets/option_chain/option_chain_widget.py` — `_StrikesSettingsDialog`: removed `setSuffix("  per side")` for a clean number-only field; hid spinbox up/down arrow buttons via `QSpinBox::up-button, ::down-button { width: 0 }` (keyboard Up/Down still works); applied flat dark-theme style (`#161b22` bg, `#30363d` border) consistent with the rest of the terminal; fixed spinbox to 60×24 px; Save/Cancel buttons fixed to 80×28 px; dialog shrunk from 290×130 to 260×100 with tighter margins and spacing.
+
+---
+
+## 2026-03-11 — feat: Option Chain — per-symbol strikes settings + ATM re-centering
+
+### Added
+- `widgets/option_chain/option_chain_widget.py` — `_StrikesSettingsDialog`: small `QDialog` with a `QSpinBox` (5–50, step 5, default 20). Shows the current symbol name; Save/Cancel buttons.
+- `widgets/option_chain/option_chain_widget.py` — **Settings ⚙** toolbar button placed next to the existing Columns button. Opens `_StrikesSettingsDialog`.
+
+### Changed
+- `widgets/option_chain/option_chain_widget.py` — Added `_DEFAULT_STRIKES_PER_SIDE = 20` constant and `self._strikes_per_side: dict[str, int]` state (keyed by symbol; `"__default__"` for the catch-all). Settings are persisted via `save_state()` / `restore_state()` — no external config file needed.
+- `widgets/option_chain/option_chain_widget.py` — Added `self._visible_rows` (the filtered ATM window) alongside existing `self._rows` (full expiry list). `_on_chain_ready()` now calls `_filter_rows_around_atm()` before passing rows to the model and to `_subscribe_chain()`, so only the N-strike window is shown and subscribed.
+- `widgets/option_chain/option_chain_widget.py` — Added `_filter_rows_around_atm()`: computes ATM index from `builder.get_atm_strike()`, slices `[atm_idx-N : atm_idx+N+1]`, clamps to list bounds.
+- `widgets/option_chain/option_chain_widget.py` — Added `_unsubscribe_chain_token()`: surgically unsubscribes one token and removes it from `_feed_subscriptions` without touching the underlying subscription.
+- `widgets/option_chain/option_chain_widget.py` — Added `_refilter_visible_rows()`: re-applies the N-strikes filter to the full row list, computing set-diffs of CE/PE token sets to unsubscribe out-of-window tokens and subscribe newly in-window ones, then resets the model.
+- `widgets/option_chain/option_chain_widget.py` — Added `_maybe_recenter()`: called on every underlying tick. Checks if `builder.get_atm_strike(self._rows, ltp)` is still within `self._visible_rows`; if not, calls `_refilter_visible_rows()` to re-centre.
+- `widgets/option_chain/option_chain_widget.py` — `_on_underlying_ltp_ui()` now calls `_maybe_recenter(ltp)` after updating ATM colours.
+- `widgets/option_chain/option_chain_widget.py` — `save_state()` / `restore_state()` updated to include `strikes_per_side` dict.
+
+### Architecture Decisions
+- `_strikes_per_side` is persisted in `save_state()` (layout.json), not `settings.yaml`, because it is a UI preference per widget instance, not a broker credential. This keeps it consistent with how column visibility is already persisted.
+- `_visible_rows` is the single source of truth for what is in the model and subscribed; `_rows` retains the full expiry list so re-centering can draw new rows without re-fetching from the broker.
+- The 950-token hard limit in `_subscribe_chain()` is retained as a safety net (N=50 per side × 2 tokens = 100 tokens; well within limit for any normal setting).
+
+---
+
+## 2026-03-11 — fix: Dock widget title text vertically clipped
+
+### Fixed
+- `widgets/base_widget.py` — `BaseWidgetTitleBar` had `setFixedHeight(28)` with `setContentsMargins(8, 0, 4, 0)` (zero top/bottom margin), giving the title label no vertical breathing room. Increased fixed height to `32px` and margins to `(8, 4, 4, 4)` so text is centred without clipping.
+- `app/theme.py` — `QDockWidget::title` rule: increased `padding` from `5px 8px` to `6px 8px` and added `min-height: 26px` to cover any dock widget that does not use a custom title bar widget.
+
+---
+
+## 2026-03-11 — feat: New widgets open as floating windows by default
+
+### Changed
+- `app/main_window.py` — `spawn_widget()` gained a `floating: bool = True` parameter. When `True` (the default for all user-initiated "Add Widget" actions) the widget is detached immediately after `addDockWidget` via `setFloating(True)` and positioned near the main window centre (560×440, offset +60/+40 px). Users can still drag it into the dock at any time. Existing callers in `_load_default_layout` now explicitly pass `floating=False` so the initial layout continues to dock widgets in place. Restored layouts are unaffected — they go through `LayoutManager.restore()`, not `spawn_widget()`.
+
+### Architecture Decisions
+- Single change point: `spawn_widget` is the sole code path for user-initiated widget creation, so one parameter covers every widget type without special-casing.
+
+---
+
+## 2026-03-11 — feat: Log Viewer Widget
+
+### Added
+- `widgets/log_viewer/qt_log_handler.py` — `QtLogHandler` singleton: a `logging.Handler` subclass with a `_SignalEmitter(QObject)` that emits `record_emitted(LogRecord)` per record. Buffers up to 5 000 records in a `deque` so widgets opened mid-session can replay past logs. Thread-safe: PySide6 queues the signal automatically when the receiver lives on the main thread.
+- `widgets/log_viewer/log_viewer_widget.py` — `LogViewerWidget(BaseWidget)` dockable log panel. Four tabs: **System**, **Orders**, **Market Data**, **Errors**. Each tab is a `QTableWidget` (Time / Level / Source / Message columns) capped at 2 000 rows with oldest-first eviction. Shared toolbar: level filter dropdown (ALL / INFO+ / WARNING+ / ERROR+), search bar (filters by message + source text), auto-scroll toggle, per-tab Clear, per-tab Export to CSV. Level colour-coding: DEBUG grey, INFO white, WARNING amber, ERROR red, CRITICAL bright red bold. Self-registers in `WidgetRegistry` under category **Diagnostics** so it appears in View → Add Widget automatically.
+- `widgets/log_viewer/__init__.py` — package init; triggers self-registration on import.
+
+### Changed
+- `app/main_window.py` — added `import widgets.log_viewer` to trigger widget registration at startup.
+- `main.py` — added `qInstallMessageHandler(_qt_message_handler)` before the Qt event loop to suppress `QFont::setPointSize` / "point size ≤ 0" warnings that pollute terminal output. Added `install_qt_handler()` call after `QApplication` creation to wire `QtLogHandler` into the root logger.
+
+### Architecture Decisions
+- `QtLogHandler` is installed on the root logger so every `logging.getLogger(name)` call across the codebase flows into the widget without any call-site changes.
+- Routing logic: `feed.*` / `market*` → Market Data; `widgets.order*` → Orders; `broker.*` → Orders if order-related keywords detected, else System; everything else → System. ERROR/CRITICAL records from any logger are also appended to the Errors aggregation tab.
+- Handler stays connected for the widget's lifetime (not disconnected on `on_hide`); records continue to accumulate while the panel is hidden, and are visible when reopened.
+- `qInstallMessageHandler` is the correct suppression point for Qt-internal warnings (not Python logging); it replaces the default handler only for filtered messages and lets everything else through to stderr.
+
+---
+
 ## 2026-03-10 — Fix: FeedStatusWidget shows Disconnected while ticks are flowing
 
 ### Fixed

@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMenu,
     QMessageBox,
+    QPushButton,
     QSizePolicy,
     QTabWidget,
     QToolBar,
@@ -31,6 +32,8 @@ import widgets.order_entry.order_entry_widget  # noqa: F401
 import widgets.positions.positions_widget  # noqa: F401
 import widgets.feed_status.feed_status_widget  # noqa: F401
 import widgets.option_chain  # noqa: F401
+
+from widgets.log_viewer.log_viewer_widget import LogViewerWindow
 
 logger = get_logger(__name__)
 
@@ -73,7 +76,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("Trading Terminal")
+        self.setWindowTitle("DemonEdge")
         self.setMinimumSize(1024, 600)
         self.resize(1400, 900)
 
@@ -110,6 +113,14 @@ class MainWindow(QMainWindow):
         self._autosave_timer = QTimer(self)
         self._autosave_timer.timeout.connect(self._auto_save)
         self._autosave_timer.start(_AUTOSAVE_INTERVAL_MS)
+
+        # Standalone Log Viewer window — created once, never destroyed
+        self._log_viewer_window = LogViewerWindow()
+        self._log_viewer_positioned = False
+        self._sb_logs_btn.clicked.connect(self._toggle_log_viewer)
+        self._log_viewer_window.visibility_changed.connect(
+            lambda _vis: self._update_logs_btn_style()
+        )
 
     # ------------------------------------------------------------------
     # UI setup
@@ -254,6 +265,16 @@ class MainWindow(QMainWindow):
             "color: #8b949e; font-family: 'Consolas', monospace;"
             " padding: 0 10px 0 0; font-size: 12px;"
         )
+
+        # Logs toggle button — permanent, sits immediately left of the clock
+        self._sb_logs_btn = QPushButton("Logs")
+        self._sb_logs_btn.setFlat(True)
+        self._sb_logs_btn.setStyleSheet(
+            "QPushButton { color: #8b949e; border: none; background: transparent;"
+            " padding: 0 10px; font-size: 12px; }"
+            "QPushButton:hover { color: #e6edf3; }"
+        )
+        sb.addPermanentWidget(self._sb_logs_btn)
         sb.addPermanentWidget(self._sb_time)
 
     # ------------------------------------------------------------------
@@ -404,8 +425,18 @@ class MainWindow(QMainWindow):
         self,
         widget_id: str,
         area: Qt.DockWidgetArea = Qt.DockWidgetArea.RightDockWidgetArea,
+        floating: bool = True,
     ) -> BaseWidget:
-        """Create a new widget instance, add it to the dock, and register it."""
+        """Create a new widget instance, add it to the dock, and register it.
+
+        Parameters
+        ----------
+        floating:
+            When True (the default for user-initiated adds) the widget is
+            immediately detached as a floating window, positioned near the
+            centre of the main window.  Pass False when building the initial
+            or restored layout so widgets dock in place.
+        """
         n = self._instance_counters.get(widget_id, 0)
         instance_id = f"{widget_id}_{n}"
         self._instance_counters[widget_id] = n + 1
@@ -414,7 +445,21 @@ class MainWindow(QMainWindow):
         widget.instance_id = instance_id
         widget.setObjectName(instance_id)
 
+        # addDockWidget must always be called so Qt tracks the widget;
+        # setFloating(True) then detaches it from the dock area.
         self.addDockWidget(area, widget)
+
+        if floating:
+            widget.setFloating(True)
+            # Place near (but visibly offset from) the main window centre so
+            # the floating window is not hidden behind the main window.
+            mw_geo = self.geometry()
+            float_w = 560
+            float_h = 440
+            x = mw_geo.center().x() - float_w // 2 + 60
+            y = mw_geo.center().y() - float_h // 2 + 40
+            widget.setGeometry(x, y, float_w, float_h)
+
         self._active_widgets[instance_id] = widget
 
         # Defer cleanup so closeEvent finishes before we deregister
@@ -474,24 +519,24 @@ class MainWindow(QMainWindow):
         """
         # Left column
         watchlist = self.spawn_widget(
-            "watchlist", Qt.DockWidgetArea.LeftDockWidgetArea
+            "watchlist", Qt.DockWidgetArea.LeftDockWidgetArea, floating=False
         )
 
         # Right area — chart takes center, order_entry splits to its right
         chart = self.spawn_widget(
-            "chart", Qt.DockWidgetArea.RightDockWidgetArea
+            "chart", Qt.DockWidgetArea.RightDockWidgetArea, floating=False
         )
         order_entry = self.spawn_widget(
-            "order_entry", Qt.DockWidgetArea.RightDockWidgetArea
+            "order_entry", Qt.DockWidgetArea.RightDockWidgetArea, floating=False
         )
         self.splitDockWidget(chart, order_entry, Qt.Orientation.Horizontal)
 
         # Bottom row — positions and feed_status tabbed together
         positions = self.spawn_widget(
-            "positions", Qt.DockWidgetArea.BottomDockWidgetArea
+            "positions", Qt.DockWidgetArea.BottomDockWidgetArea, floating=False
         )
         feed_status = self.spawn_widget(
-            "feed_status", Qt.DockWidgetArea.BottomDockWidgetArea
+            "feed_status", Qt.DockWidgetArea.BottomDockWidgetArea, floating=False
         )
         self.tabifyDockWidget(positions, feed_status)
 
@@ -566,6 +611,35 @@ class MainWindow(QMainWindow):
         logger.info("Layout reset to default")
 
     # ------------------------------------------------------------------
+    # Log Viewer window
+    # ------------------------------------------------------------------
+
+    def _toggle_log_viewer(self) -> None:
+        if self._log_viewer_window.isVisible():
+            self._log_viewer_window.hide()
+        else:
+            if not self._log_viewer_positioned:
+                mw_geo = self.geometry()
+                self._log_viewer_window.move(mw_geo.x() + 40, mw_geo.y() + 60)
+                self._log_viewer_positioned = True
+            self._log_viewer_window.show()
+            self._log_viewer_window.raise_()
+        self._update_logs_btn_style()
+
+    def _update_logs_btn_style(self) -> None:
+        if self._log_viewer_window.isVisible():
+            self._sb_logs_btn.setStyleSheet(
+                "QPushButton { color: #58a6ff; border: none; background: transparent;"
+                " padding: 0 10px; font-size: 12px; }"
+            )
+        else:
+            self._sb_logs_btn.setStyleSheet(
+                "QPushButton { color: #8b949e; border: none; background: transparent;"
+                " padding: 0 10px; font-size: 12px; }"
+                "QPushButton:hover { color: #e6edf3; }"
+            )
+
+    # ------------------------------------------------------------------
     # Clock & About
     # ------------------------------------------------------------------
 
@@ -576,8 +650,8 @@ class MainWindow(QMainWindow):
     def _on_about(self) -> None:
         QMessageBox.about(
             self,
-            "About Trading Terminal",
-            f"<b>Trading Terminal</b> v{_APP_VERSION}<br><br>"
+            "About DemonEdge",
+            f"<b>DemonEdge</b> v{_APP_VERSION}<br><br>"
             "A Python desktop trading terminal built with PySide6.<br>"
             "Broker: Angel SmartAPI<br><br>"
             "<small>Run with: <code>uv run python main.py</code></small>",
@@ -591,6 +665,11 @@ class MainWindow(QMainWindow):
         """Save layout, stop feed, then exit."""
         if self._active_widgets:
             self._save_layout()
+
+        # Hide the standalone log viewer so it doesn't linger after the
+        # main window closes (its own closeEvent only hides, so we must
+        # hide it explicitly here before the app exits).
+        self._log_viewer_window.hide()
 
         from feed.market_feed import MarketFeed
         try:

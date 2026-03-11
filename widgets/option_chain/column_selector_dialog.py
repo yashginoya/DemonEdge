@@ -70,6 +70,7 @@ class ColumnSelectorDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Column Visibility")
         self.setMinimumWidth(280)
+        self.setMinimumHeight(420)
         self.setStyleSheet(_QSS)
 
         layout = QVBoxLayout(self)

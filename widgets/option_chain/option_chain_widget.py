@@ -11,12 +11,16 @@ from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QFormLayout,
     QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
     QSizePolicy,
+    QSpinBox,
     QTableView,
     QVBoxLayout,
     QWidget,
@@ -46,6 +50,9 @@ INDEX_TOKENS: dict[str, dict[str, str]] = {
 # Max tokens to subscribe — warn above this; restrict to ±N strikes if exceeded
 _SUBSCRIPTION_LIMIT = 950
 _STRIKE_WINDOW       = 50  # subscribe only ±50 strikes of ATM when over limit
+
+# Default strikes shown/subscribed on each side of ATM
+_DEFAULT_STRIKES_PER_SIDE = 20
 
 _QSS = """
 QWidget {
@@ -112,6 +119,68 @@ QFrame#ltpBar {
     border-bottom: 1px solid #30363d;
 }
 """
+
+
+# ── Strikes settings dialog ───────────────────────────────────────────────────
+
+class _StrikesSettingsDialog(QDialog):
+    """Small dialog for configuring how many strikes are shown per side of ATM."""
+
+    def __init__(self, symbol: str, current_n: int, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Strike Settings")
+        self.setFixedSize(260, 100)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 10, 14, 10)
+        layout.setSpacing(8)
+
+        form = QFormLayout()
+        form.setSpacing(6)
+        form.setContentsMargins(0, 0, 0, 0)
+
+        if symbol:
+            sym_lbl = QLabel(f"<b>{symbol}</b>")
+            form.addRow("Symbol:", sym_lbl)
+
+        self._spinbox = QSpinBox()
+        self._spinbox.setRange(5, 50)
+        self._spinbox.setSingleStep(5)
+        self._spinbox.setValue(current_n)
+        # No suffix — clean number-only display
+        self._spinbox.setToolTip(
+            "Number of strikes shown on each side of ATM.\n"
+            "Total visible = 2 × N + 1 (the ATM strike itself)."
+        )
+        self._spinbox.setFixedWidth(60)
+        self._spinbox.setFixedHeight(24)
+        self._spinbox.setStyleSheet("""
+            QSpinBox {
+                background: #161b22;
+                color: #e6edf3;
+                border: 1px solid #30363d;
+                border-radius: 3px;
+                padding: 1px 6px;
+            }
+            QSpinBox::up-button, QSpinBox::down-button {
+                width: 0;
+                border: none;
+            }
+        """)
+        form.addRow("Strikes per side:", self._spinbox)
+        layout.addLayout(form)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
+        )
+        for btn in buttons.buttons():
+            btn.setFixedSize(80, 28)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def value(self) -> int:
+        return self._spinbox.value()
 
 
 # ── Worker ────────────────────────────────────────────────────────────────────
@@ -203,9 +272,13 @@ class OptionChainWidget(BaseWidget):
         self._underlying_name: str = ""
         self._current_expiry:  str = ""
         self._underlying_ltp:  float = 0.0
-        self._rows:            list[OptionChainRow] = []
+        self._rows:            list[OptionChainRow] = []   # full strike list for the expiry
+        self._visible_rows:    list[OptionChainRow] = []   # filtered window around ATM
         self._underlying_token:  str = ""
         self._underlying_exchange: str = "NSE"
+
+        # Per-symbol strikes-per-side settings: {"NIFTY": 20, "BANKNIFTY": 15, ...}
+        self._strikes_per_side: dict[str, int] = {}
 
         # Token → strike lookup for fast IV calculation
         self._ce_token_strike: dict[str, float] = {}
@@ -266,6 +339,11 @@ class OptionChainWidget(BaseWidget):
         col_btn.setFixedWidth(90)
         col_btn.clicked.connect(self._open_column_selector)
         toolbar_layout.addWidget(col_btn)
+
+        settings_btn = QPushButton("Settings ⚙")
+        settings_btn.setFixedWidth(90)
+        settings_btn.clicked.connect(self._open_settings_dialog)
+        toolbar_layout.addWidget(settings_btn)
 
         toolbar_layout.addStretch()
 
@@ -344,6 +422,112 @@ class OptionChainWidget(BaseWidget):
         self._model.endResetModel()
         self._apply_column_widths()
 
+    def _open_settings_dialog(self) -> None:
+        symbol = self._underlying_name or self._underlying_input.text().upper().strip()
+        current_n = self._get_strikes_per_side(symbol)
+        dlg = _StrikesSettingsDialog(symbol, current_n, self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            n = dlg.value()
+            key = symbol if symbol else "__default__"
+            self._strikes_per_side[key] = n
+            # If a chain is already loaded, re-filter immediately
+            if self._rows:
+                self._refilter_visible_rows()
+
+    # ------------------------------------------------------------------
+    # Strike filtering helpers
+    # ------------------------------------------------------------------
+
+    def _get_strikes_per_side(self, symbol: str = "") -> int:
+        """Return the configured N for the given symbol (falls back to default 20)."""
+        s = symbol or self._underlying_name
+        if s and s in self._strikes_per_side:
+            return self._strikes_per_side[s]
+        return self._strikes_per_side.get("__default__", _DEFAULT_STRIKES_PER_SIDE)
+
+    def _filter_rows_around_atm(
+        self, rows: list[OptionChainRow], underlying_ltp: float
+    ) -> list[OptionChainRow]:
+        """Return at most (2×N + 1) rows centred on the ATM strike."""
+        if not rows:
+            return rows
+        n = self._get_strikes_per_side()
+        if underlying_ltp > 0:
+            atm_strike = builder.get_atm_strike(rows, underlying_ltp)
+            atm_idx = next(
+                (i for i, r in enumerate(rows) if r.strike == atm_strike),
+                len(rows) // 2,
+            )
+        else:
+            atm_idx = len(rows) // 2
+        lo = max(0, atm_idx - n)
+        hi = min(len(rows) - 1, atm_idx + n)
+        return rows[lo : hi + 1]
+
+    def _unsubscribe_chain_token(self, token: str, callback) -> None:
+        """Surgically unsubscribe one chain token and remove it from the tracking list."""
+        from feed.market_feed import MarketFeed
+        MarketFeed.instance().unsubscribe("NFO", token, callback)
+        self._feed_subscriptions = [
+            (e, t, cb, m) for e, t, cb, m in self._feed_subscriptions
+            if not (e == "NFO" and t == token and cb == callback)
+        ]
+
+    def _refilter_visible_rows(self) -> None:
+        """Re-apply the N-strikes filter to the current full rows, updating
+        subscriptions surgically (unsubscribe out-of-window, subscribe newly in-window)
+        and refreshing the model."""
+        if not self._rows:
+            return
+        ltp = self._underlying_ltp
+        new_visible = self._filter_rows_around_atm(self._rows, ltp)
+
+        old_ce = {r.ce_token for r in self._visible_rows if r.ce_token}
+        old_pe = {r.pe_token for r in self._visible_rows if r.pe_token}
+        new_ce = {r.ce_token for r in new_visible if r.ce_token}
+        new_pe = {r.pe_token for r in new_visible if r.pe_token}
+
+        for token in old_ce - new_ce:
+            self._unsubscribe_chain_token(token, self._on_ce_tick)
+        for token in old_pe - new_pe:
+            self._unsubscribe_chain_token(token, self._on_pe_tick)
+        for r in new_visible:
+            if r.ce_token and r.ce_token not in old_ce:
+                self.subscribe_feed(
+                    "NFO", r.ce_token, self._on_ce_tick, SubscriptionMode.SNAP_QUOTE
+                )
+            if r.pe_token and r.pe_token not in old_pe:
+                self.subscribe_feed(
+                    "NFO", r.pe_token, self._on_pe_tick, SubscriptionMode.SNAP_QUOTE
+                )
+
+        self._visible_rows = new_visible
+        atm_strike = (
+            builder.get_atm_strike(new_visible, ltp)
+            if ltp > 0 and new_visible
+            else (new_visible[len(new_visible) // 2].strike if new_visible else 0.0)
+        )
+        self._model.set_rows(new_visible, atm_strike)
+        if ltp > 0:
+            self._model.update_atm(ltp)
+        self._apply_column_widths()
+        self._scroll_to_atm()
+        n = len(new_visible)
+        self._status_label.setText(f"Live — {n} strikes")
+        self._status_label.setStyleSheet("color: #3fb950; font-size: 11px;")
+
+    def _maybe_recenter(self, ltp: float) -> None:
+        """Re-center the strike window when ATM has moved outside the visible rows."""
+        if not self._rows or not self._visible_rows:
+            return
+        atm_strike = builder.get_atm_strike(self._rows, ltp)
+        if atm_strike not in {r.strike for r in self._visible_rows}:
+            logger.info(
+                "OptionChain: ATM %.0f moved out of visible window — re-centering",
+                atm_strike,
+            )
+            self._refilter_visible_rows()
+
     # ------------------------------------------------------------------
     # Chain loading (worker thread)
     # ------------------------------------------------------------------
@@ -370,23 +554,28 @@ class OptionChainWidget(BaseWidget):
         expiry: str,
         underlying_exchange: str,
     ) -> None:
-        underlying_name = rows[0].ce_token and ""  # unused; we'll track via worker
         # Recover underlying name from the input field (worker already uppercased it)
         self._underlying_name = self._underlying_input.text().upper().strip()
         self._current_expiry  = expiry
         self._underlying_ltp  = underlying_ltp
-        self._rows            = rows
+        self._rows            = rows          # full strike list for the expiry
         self._underlying_exchange = underlying_exchange
 
-        # Build token→strike lookup
+        # Build token→strike lookup over full row set (subscribed subset is smaller
+        # but having extra entries is harmless — only subscribed tokens send ticks)
         self._ce_token_strike = {r.ce_token: r.strike for r in rows if r.ce_token}
         self._pe_token_strike = {r.pe_token: r.strike for r in rows if r.pe_token}
 
-        # Compute ATM
-        atm_strike = builder.get_atm_strike(rows, underlying_ltp) if underlying_ltp > 0 else (rows[len(rows) // 2].strike if rows else 0.0)
+        # Apply N-strikes filter around ATM
+        self._visible_rows = self._filter_rows_around_atm(rows, underlying_ltp)
+        atm_strike = (
+            builder.get_atm_strike(self._visible_rows, underlying_ltp)
+            if underlying_ltp > 0 and self._visible_rows
+            else (self._visible_rows[len(self._visible_rows) // 2].strike if self._visible_rows else 0.0)
+        )
 
-        # Update model
-        self._model.set_rows(rows, atm_strike)
+        # Update model with filtered rows only
+        self._model.set_rows(self._visible_rows, atm_strike)
         if underlying_ltp > 0:
             self._model.update_atm(underlying_ltp)
 
@@ -403,8 +592,8 @@ class OptionChainWidget(BaseWidget):
         # Apply column widths after model reset
         self._apply_column_widths()
 
-        # Subscribe feeds for this chain
-        self._subscribe_chain(rows)
+        # Subscribe feeds for the visible (filtered) rows only
+        self._subscribe_chain(self._visible_rows)
 
         # Subscribe underlying for spot price
         self._subscribe_underlying()
@@ -415,7 +604,7 @@ class OptionChainWidget(BaseWidget):
         # Scroll to ATM
         self._scroll_to_atm()
 
-        n = len(rows)
+        n = len(self._visible_rows)
         self._status_label.setText(f"Live — {n} strikes")
         self._status_label.setStyleSheet("color: #3fb950; font-size: 11px;")
 
@@ -544,6 +733,7 @@ class OptionChainWidget(BaseWidget):
         self._underlying_ltp = ltp
         self._model.update_atm(ltp)
         self._refresh_ltp_bar()
+        self._maybe_recenter(ltp)
 
     # ------------------------------------------------------------------
     # Helpers
@@ -601,9 +791,10 @@ class OptionChainWidget(BaseWidget):
 
     def save_state(self) -> dict:
         return {
-            "underlying": self._underlying_name,
-            "expiry":     self._current_expiry,
-            "visible_columns": [c.key for c in ALL_COLUMNS if c.visible],
+            "underlying":       self._underlying_name,
+            "expiry":           self._current_expiry,
+            "visible_columns":  [c.key for c in ALL_COLUMNS if c.visible],
+            "strikes_per_side": dict(self._strikes_per_side),
         }
 
     def restore_state(self, state: dict) -> None:
@@ -614,6 +805,8 @@ class OptionChainWidget(BaseWidget):
         if vis_keys:
             for col in ALL_COLUMNS:
                 col.visible = col.key in vis_keys
+
+        self._strikes_per_side = dict(state.get("strikes_per_side", {}))
 
         if underlying:
             self._underlying_input.setText(underlying)

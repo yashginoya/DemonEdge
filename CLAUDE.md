@@ -183,6 +183,19 @@ Every widget must:
 - On app exit, `MainWindow` serializes dock layout + each widget's `save_state()` to `config/layout.json`.
 - On startup, layout is restored from `layout.json` if it exists.
 
+### Naming Conventions
+
+#### Application Name
+- The application is named **DemonEdge**. Do not use "Trading Terminal" anywhere in user-visible text.
+
+#### Window Title Convention
+- The main window title is exactly `"DemonEdge"` — no suffix.
+- **Standalone secondary windows** (`QWidget` with `Qt.WindowType.Window` flag, or `QMainWindow`) must use the format `"DemonEdge - <Window Name>"`.
+  - Examples: `"DemonEdge - Log Viewer"`, `"DemonEdge - Connect to Broker"`.
+- **`QDialog` subclasses** must use a short descriptive title only — **do not** apply the `"DemonEdge - "` prefix to dialogs.
+  - Examples: `"Strike Settings"`, `"Column Visibility"`, `"Add Instrument"`, `"Confirm Order"`.
+- The distinction: standalone windows live in the taskbar / OS window list and need the app name for context; dialogs are always parented to a window and their title is already contextual.
+
 ---
 
 ## Documentation (`docs/`)

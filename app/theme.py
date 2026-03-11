@@ -149,7 +149,8 @@ QDockWidget {
 QDockWidget::title {
     background-color: #1f2937;
     color: #e6edf3;
-    padding: 5px 8px;
+    padding: 6px 8px;
+    min-height: 26px;
     border-bottom: 1px solid #30363d;
     text-align: left;
     font-weight: 600;

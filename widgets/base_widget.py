@@ -66,11 +66,11 @@ class BaseWidgetTitleBar(QWidget):
 
     def __init__(self, title: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setFixedHeight(28)
+        self.setFixedHeight(32)
         self.setStyleSheet(_TITLEBAR_QSS)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 0, 4, 0)
+        layout.setContentsMargins(8, 4, 4, 4)
         layout.setSpacing(2)
 
         # Title label
