@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.app_state import AppState
+from app.detached_window import DetachedWindow
 from app.layout_manager import LayoutManager
 from app.widget_registry import WidgetRegistry
 from utils.logger import get_logger
@@ -96,6 +97,8 @@ class MainWindow(QMainWindow):
         # Widget management
         self._active_widgets: dict[str, BaseWidget] = {}
         self._instance_counters: dict[str, int] = {}
+        # Detached windows: instance_id → DetachedWindow
+        self._detached_windows: dict[str, DetachedWindow] = {}
 
         # Build UI shell
         self._setup_menu()
@@ -467,6 +470,11 @@ class MainWindow(QMainWindow):
             lambda iid=instance_id: QTimer.singleShot(0, lambda: self.remove_widget(iid))
         )
 
+        # Detach-to-window wiring
+        widget.detach_requested.connect(
+            lambda iid=instance_id: self._detach_widget(iid)
+        )
+
         # Inter-widget wiring
         if widget.widget_id == "watchlist":
             widget.instrument_for_order_entry.connect(  # type: ignore[attr-defined]
@@ -504,6 +512,104 @@ class MainWindow(QMainWindow):
         w = self.get_first_widget_of_type("positions")
         if w is not None:
             w.refresh()  # type: ignore[attr-defined]
+
+    # ------------------------------------------------------------------
+    # Detach / dock-back
+    # ------------------------------------------------------------------
+
+    def _detach_widget(
+        self,
+        instance_id: str,
+        geometry: "list[int] | None" = None,
+    ) -> None:
+        """Tear a docked widget out into a standalone OS window.
+
+        The inner content widget is re-parented into a ``DetachedWindow``.
+        The ``BaseWidget`` (QDockWidget shell) is removed from the dock but
+        kept alive so it can be re-docked later.  Feed subscriptions are
+        NOT cancelled — data keeps flowing into the detached content.
+
+        Parameters
+        ----------
+        geometry:
+            Optional ``[x, y, width, height]`` to position the DetachedWindow.
+            Falls back to a sensible offset from the main window centre.
+        """
+        base_widget = self._active_widgets.get(instance_id)
+        if base_widget is None:
+            return
+        if instance_id in self._detached_windows:
+            # Already detached — bring to front
+            self._detached_windows[instance_id].raise_()
+            return
+
+        inner = base_widget.widget()
+        if inner is None:
+            logger.warning("_detach_widget: no inner widget for %s", instance_id)
+            return
+
+        display_name = base_widget.windowTitle()
+
+        # Mark as detached BEFORE removeDockWidget so hideEvent suppresses
+        # on_hide / _unsubscribe_all_feeds while feeds are still active.
+        base_widget._is_detached = True
+
+        # Remove from main window dock (triggers hideEvent — suppressed above)
+        self.removeDockWidget(base_widget)
+
+        # DetachedWindow.__init__ re-parents inner from base_widget → itself
+        win = DetachedWindow(inner, display_name, instance_id)
+        win.dock_back_requested.connect(self._dock_back_widget)
+
+        # Position
+        if geometry and len(geometry) == 4:
+            win.setGeometry(*geometry)
+        else:
+            mw_geo = self.geometry()
+            w_size, h_size = max(inner.width(), 560), max(inner.height(), 440)
+            x = mw_geo.center().x() - w_size // 2 + 60
+            y = mw_geo.center().y() - h_size // 2 + 40
+            win.setGeometry(x, y, w_size, h_size)
+
+        self._detached_windows[instance_id] = win
+        win.show()
+        win.raise_()
+        logger.debug("Widget detached: %s → standalone window", instance_id)
+
+    def _dock_back_widget(self, instance_id: str) -> None:
+        """Re-attach a previously detached widget back into the main dock.
+
+        The inner content widget is moved from the DetachedWindow back into
+        the BaseWidget (QDockWidget), which is then re-added to the dock.
+        Feed subscriptions are refreshed via the resulting showEvent.
+        """
+        win = self._detached_windows.pop(instance_id, None)
+        if win is None:
+            return
+
+        base_widget = self._active_widgets.get(instance_id)
+        if base_widget is None:
+            win.force_close()
+            return
+
+        # Take the inner widget back from DetachedWindow
+        inner = win.take_inner()
+
+        # Clean up any stale feed subscriptions accumulated while detached
+        # so that the upcoming showEvent re-subscribes from a clean slate.
+        base_widget._unsubscribe_all_feeds()
+
+        # Clear the detached flag BEFORE re-adding to dock so showEvent
+        # (→ on_show) is allowed to run normally.
+        base_widget._is_detached = False
+
+        # Put content back and re-attach to the dock
+        base_widget.setWidget(inner)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, base_widget)
+        base_widget.show()
+
+        win.force_close()
+        logger.debug("Widget docked back: %s", instance_id)
 
     # ------------------------------------------------------------------
     # Layout
@@ -549,7 +655,7 @@ class MainWindow(QMainWindow):
 
     def _restore_layout(self) -> None:
         """Restore layout from layout.json."""
-        restored = LayoutManager.restore(self)
+        restored, detached_geos = LayoutManager.restore(self)
         for w in restored:
             self._active_widgets[w.instance_id] = w
             # Update counters so future spawns don't collide with restored ids
@@ -563,6 +669,10 @@ class MainWindow(QMainWindow):
             w.closed.connect(
                 lambda iid=w.instance_id: QTimer.singleShot(0, lambda: self.remove_widget(iid))
             )
+            # Detach-to-window wiring
+            w.detach_requested.connect(
+                lambda iid=w.instance_id: self._detach_widget(iid)
+            )
             # Re-wire inter-widget signals for restored widgets
             if w.widget_id == "watchlist":
                 w.instrument_for_order_entry.connect(  # type: ignore[attr-defined]
@@ -573,15 +683,33 @@ class MainWindow(QMainWindow):
                     lambda _oid: self._on_order_placed()
                 )
 
+        # Re-open DetachedWindows that were open when the layout was saved.
+        # Deferred by one event-loop tick so Qt finishes placing all docks first.
+        for iid, geo in detached_geos.items():
+            if iid in self._active_widgets:
+                QTimer.singleShot(
+                    0, lambda i=iid, g=geo: self._detach_widget(i, g)
+                )
+
     def _save_layout(self) -> None:
         if not self._active_widgets:
             logger.debug("No widgets to save")
             return
-        LayoutManager.save(self, list(self._active_widgets.values()))
+        detached_geos = {
+            iid: win.geometry() for iid, win in self._detached_windows.items()
+        }
+        LayoutManager.save(self, list(self._active_widgets.values()), detached_geos or None)
 
     def _auto_save(self) -> None:
         if self._active_widgets:
-            LayoutManager.save(self, list(self._active_widgets.values()))
+            detached_geos = {
+                iid: win.geometry() for iid, win in self._detached_windows.items()
+            }
+            LayoutManager.save(
+                self,
+                list(self._active_widgets.values()),
+                detached_geos or None,
+            )
             logger.info("Layout auto-saved (%d widgets)", len(self._active_widgets))
 
     def _on_reset_layout(self) -> None:
@@ -595,8 +723,14 @@ class MainWindow(QMainWindow):
         if reply != QMessageBox.StandardButton.Yes:
             return
 
+        # Close all detached windows (force-close, not dock-back)
+        for win in list(self._detached_windows.values()):
+            win.force_close()
+        self._detached_windows.clear()
+
         # Close all active dock widgets
         for widget in list(self._active_widgets.values()):
+            widget._is_detached = False  # ensure closeEvent runs on_hide
             self.removeDockWidget(widget)
             widget.deleteLater()
         self._active_widgets.clear()
@@ -662,9 +796,15 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        """Save layout, stop feed, then exit."""
+        """Save layout, close detached windows, stop feed, then exit."""
         if self._active_widgets:
             self._save_layout()
+
+        # Close all detached windows for real (their normal closeEvent docks
+        # back rather than destroying, so we must call force_close()).
+        for win in list(self._detached_windows.values()):
+            win.force_close()
+        self._detached_windows.clear()
 
         # Hide the standalone log viewer so it doesn't linger after the
         # main window closes (its own closeEvent only hides, so we must

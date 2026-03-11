@@ -46,8 +46,21 @@ class _LayoutManager:
     def has_saved_layout(self) -> bool:
         return os.path.exists(_LAYOUT_PATH)
 
-    def save(self, main_window: QMainWindow, widgets: list["BaseWidget"]) -> None:
+    def save(
+        self,
+        main_window: QMainWindow,
+        widgets: list["BaseWidget"],
+        detached_geometries: "dict | None" = None,
+    ) -> None:
         """Serialise dock geometry and each widget's state to layout.json.
+
+        Parameters
+        ----------
+        detached_geometries:
+            Optional mapping of ``instance_id → QRect`` for widgets that are
+            currently shown in a DetachedWindow.  When provided, each detached
+            widget's geometry is persisted so it can be re-opened in the same
+            position on the next session.
 
         Written atomically: temp file → rename.
         """
@@ -61,13 +74,15 @@ class _LayoutManager:
             except Exception:
                 logger.exception("save_state() failed for %s — using empty state", w.instance_id)
                 state = {}
-            widget_entries.append(
-                {
-                    "instance_id": w.instance_id,
-                    "widget_id": w.widget_id,
-                    "state": state,
-                }
-            )
+            entry: dict = {
+                "instance_id": w.instance_id,
+                "widget_id": w.widget_id,
+                "state": state,
+            }
+            if detached_geometries and w.instance_id in detached_geometries:
+                geo = detached_geometries[w.instance_id]
+                entry["detached_geometry"] = [geo.x(), geo.y(), geo.width(), geo.height()]
+            widget_entries.append(entry)
 
         data = {
             "version": _FORMAT_VERSION,
@@ -83,15 +98,24 @@ class _LayoutManager:
         os.replace(tmp_path, _LAYOUT_PATH)
         logger.info("Layout saved (%d widgets)", len(widgets))
 
-    def restore(self, main_window: QMainWindow) -> list["BaseWidget"]:
+    def restore(
+        self, main_window: QMainWindow
+    ) -> "tuple[list[BaseWidget], dict[str, list[int]]]":
         """Restore widgets and dock geometry from layout.json.
 
         For each widget entry: creates instance via WidgetRegistry, restores state,
         adds to main_window. Then restores Qt dock geometry via restoreState().
-        Returns list of restored BaseWidget instances (caller registers them).
+
+        Returns
+        -------
+        (widgets, detached_geometries)
+            ``widgets`` — list of restored BaseWidget instances (caller registers them).
+            ``detached_geometries`` — mapping of ``instance_id → [x, y, w, h]`` for
+            widgets that were detached when the layout was saved.  The caller is
+            responsible for re-opening those DetachedWindows.
         """
         if not self.has_saved_layout():
-            return []
+            return [], {}
 
         from app.widget_registry import WidgetRegistry
 
@@ -100,7 +124,7 @@ class _LayoutManager:
                 data = json.load(f)
         except Exception:
             logger.exception("Failed to read layout.json — starting fresh")
-            return []
+            return [], {}
 
         if data.get("version", 0) != _FORMAT_VERSION:
             logger.warning(
@@ -108,9 +132,11 @@ class _LayoutManager:
                 data.get("version"),
                 _FORMAT_VERSION,
             )
-            return []
+            return [], {}
 
         widgets: list[BaseWidget] = []
+        detached_geometries: dict[str, list[int]] = {}
+
         for entry in data.get("widgets", []):
             widget_id = entry.get("widget_id", "")
             instance_id = entry.get("instance_id", widget_id)
@@ -126,6 +152,12 @@ class _LayoutManager:
                     logger.exception("restore_state() failed for %s", instance_id)
                 main_window.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, widget)
                 widgets.append(widget)
+
+                # Record detach geometry if present
+                geo = entry.get("detached_geometry")
+                if isinstance(geo, list) and len(geo) == 4:
+                    detached_geometries[instance_id] = geo
+
             except KeyError:
                 logger.warning("Unknown widget_id %r in layout.json — skipping", widget_id)
             except Exception:
@@ -140,7 +172,7 @@ class _LayoutManager:
                 logger.exception("Failed to restore Qt dock state")
 
         logger.info("Layout restored (%d widgets)", len(widgets))
-        return widgets
+        return widgets, detached_geometries
 
 
 LayoutManager = _LayoutManager()

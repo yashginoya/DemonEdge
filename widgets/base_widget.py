@@ -4,6 +4,7 @@ from typing import Callable
 from PySide6.QtCore import Signal
 from PySide6.QtGui import QCloseEvent, QFont, QHideEvent, QShowEvent
 from PySide6.QtWidgets import (
+    QMenu,
     QDockWidget,
     QHBoxLayout,
     QLabel,
@@ -46,6 +47,12 @@ QPushButton#floatBtnActive:hover {
 }
 """
 
+_CONTEXT_MENU_QSS = (
+    "QMenu { background: #21262d; color: #e6edf3; border: 1px solid #30363d; }"
+    "QMenu::item { padding: 4px 16px; }"
+    "QMenu::item:selected { background: #30363d; }"
+)
+
 
 class BaseWidgetTitleBar(QWidget):
     """Custom title bar installed on every BaseWidget dock.
@@ -59,10 +66,13 @@ class BaseWidgetTitleBar(QWidget):
         Emitted when the ✕ button is clicked.
     float_clicked
         Emitted when the ⧉ button is clicked.
+    detach_requested
+        Emitted when "Detach to Window" is chosen from the right-click menu.
     """
 
     close_clicked = Signal()
     float_clicked = Signal()
+    detach_requested = Signal()
 
     def __init__(self, title: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -100,6 +110,17 @@ class BaseWidgetTitleBar(QWidget):
         self._close_btn.setToolTip("Close widget")
         self._close_btn.clicked.connect(self.close_clicked)
         layout.addWidget(self._close_btn)
+
+    # ------------------------------------------------------------------
+    # Qt overrides
+    # ------------------------------------------------------------------
+
+    def contextMenuEvent(self, event) -> None:
+        """Right-click on the title bar → offer "Detach to Window"."""
+        menu = QMenu(self)
+        menu.setStyleSheet(_CONTEXT_MENU_QSS)
+        menu.addAction("⧉  Detach to Window").triggered.connect(self.detach_requested)
+        menu.exec(event.globalPos())
 
     # ------------------------------------------------------------------
     # Public helpers (called by BaseWidget on state changes)
@@ -147,6 +168,8 @@ class BaseWidget(QDockWidget):
 
     # Emitted from closeEvent so MainWindow can clean up _active_widgets
     closed: Signal = Signal()
+    # Emitted when the user right-clicks the title bar and chooses "Detach to Window"
+    detach_requested: Signal = Signal()
 
     widget_id: str = ""
     instance_id: str = ""  # set by MainWindow.spawn_widget()
@@ -156,6 +179,10 @@ class BaseWidget(QDockWidget):
 
         # Tracks subscriptions made via subscribe_feed() for auto-cleanup
         self._feed_subscriptions: list[tuple[str, str, Callable, int]] = []
+
+        # Set when content has been moved to a DetachedWindow so that the
+        # dock widget's hide/close events do not unsubscribe live feeds.
+        self._is_detached: bool = False
 
         # Ensure all dock features are enabled
         self.setFeatures(
@@ -171,6 +198,7 @@ class BaseWidget(QDockWidget):
         # Wire title bar buttons
         self._title_bar.close_clicked.connect(self.close)
         self._title_bar.float_clicked.connect(self._toggle_float)
+        self._title_bar.detach_requested.connect(self.detach_requested)
 
         # Update float button appearance when floating state changes
         self.topLevelChanged.connect(self._on_float_state_changed)
@@ -267,12 +295,16 @@ class BaseWidget(QDockWidget):
         super().showEvent(event)
 
     def hideEvent(self, event: QHideEvent) -> None:
-        self.on_hide()
-        self._unsubscribe_all_feeds()
+        # When the widget is detached its content is live in a DetachedWindow.
+        # Skip on_hide/unsubscribe so feeds keep updating the detached content.
+        if not self._is_detached:
+            self.on_hide()
+            self._unsubscribe_all_feeds()
         super().hideEvent(event)
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        self.on_hide()
-        self._unsubscribe_all_feeds()
+        if not self._is_detached:
+            self.on_hide()
+            self._unsubscribe_all_feeds()
         self.closed.emit()
         super().closeEvent(event)

@@ -2,6 +2,32 @@
 
 ---
 
+## 2026-03-11 — fix: Remove internal toolbar from DetachedWindow
+
+### Changed
+- `app/detached_window.py` — Removed the internal toolbar (widget name label + "⬆ Dock back" button). The detached window now shows only the widget content directly below the OS title bar. Right-click context menu ("⬆ Dock back") is unchanged. Removed unused `QHBoxLayout`, `QLabel`, `QPushButton`, and `_TOOLBAR_QSS` imports/constants.
+
+---
+
+## 2026-03-11 — feat: Detach widget to standalone OS window
+
+### Added
+- `app/detached_window.py` — New `DetachedWindow` class. A `Qt.WindowType.Window` QWidget that wraps a BaseWidget's inner content widget as an independent OS-level window. Shows a thin toolbar with a "⬆ Dock back" button and a right-click context menu with the same option. Closing via the OS X button docks the widget back rather than destroying it. `force_close()` is called by MainWindow on app exit to actually close it. Title format: `"DemonEdge - <Widget Name>"`.
+
+### Changed
+- `widgets/base_widget.py` — Added `detach_requested = Signal()` to both `BaseWidgetTitleBar` and `BaseWidget`. `BaseWidgetTitleBar` now has a `contextMenuEvent` that shows a right-click menu with "⧉ Detach to Window". Added `_is_detached: bool = False` instance flag; when set, `hideEvent` and `closeEvent` skip `on_hide()`/`_unsubscribe_all_feeds()` so live market feeds keep running while the content is displayed in a DetachedWindow. Added `QMenu` import.
+- `app/main_window.py` — Added `_detached_windows: dict[str, DetachedWindow]` tracking map. Added `_detach_widget(instance_id, geometry=None)` — marks widget as detached, removes from dock (suppressed hide), re-parents inner content into a DetachedWindow, positions it sensibly. Added `_dock_back_widget(instance_id)` — takes inner widget back from DetachedWindow, unsubscribes stale feeds, re-adds BaseWidget to dock, triggers `on_show` for fresh subscriptions. `spawn_widget` and `_restore_layout` both wire `widget.detach_requested` to `_detach_widget`. `_save_layout`/`_auto_save` pass detached window geometries to LayoutManager. `closeEvent` iterates `_detached_windows` and calls `force_close()` before exit. `_on_reset_layout` closes detached windows before clearing widgets.
+- `app/layout_manager.py` — `save()` accepts optional `detached_geometries: dict` and records `"detached_geometry": [x, y, w, h]` in each detached widget's entry. `restore()` now returns `(widgets, detached_geometries)` tuple; callers that had `detached_geometry` in their saved entry are re-detached via a deferred `QTimer.singleShot(0, ...)` call after the layout is fully restored.
+
+### Architecture Decisions
+- The BaseWidget (QDockWidget shell) is kept alive when detached — only the inner content widget is re-parented to DetachedWindow. This preserves instance_id, signals, and state while the content is visible elsewhere.
+- Feed subscriptions are NOT cancelled on detach (`_is_detached` flag suppresses the normal hideEvent unsubscribe). On dock-back, existing subscriptions are explicitly cleared then `on_show()` re-subscribes from scratch, preventing any double-subscription accumulation.
+- Closing a DetachedWindow via the OS X button docks the widget back rather than destroying it, matching user expectation ("this is a widget panel, not a document window"). Destroy is only possible by closing the widget from the dock after docking back.
+- The existing QDockWidget float/unfloat (⧉ button) is unchanged — detach-to-window is an additional capability via right-click, not a replacement.
+- Log Viewer (`LogViewerWindow`) is explicitly excluded: it already has its own standalone window implementation and is not a BaseWidget.
+
+---
+
 ## 2026-03-11 — feat: Order placement toast notification popup
 
 ### Added
