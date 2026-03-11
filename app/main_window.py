@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 from PySide6.QtCore import Qt, QThread, QTimer
 from PySide6.QtCore import Signal as _Signal
-from PySide6.QtGui import QAction, QCloseEvent, QIcon
+from PySide6.QtGui import QAction, QCloseEvent, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
@@ -20,8 +20,10 @@ from PySide6.QtWidgets import (
 )
 
 from app.app_state import AppState
+from app.command_palette import CommandPalette
 from app.detached_window import DetachedWindow
 from app.layout_manager import LayoutManager
+from app.shortcuts_dialog import KeyboardShortcutsWindow
 from app.widget_registry import WidgetRegistry
 from utils.logger import get_logger
 from widgets.base_widget import BaseWidget
@@ -125,6 +127,17 @@ class MainWindow(QMainWindow):
             lambda _vis: self._update_logs_btn_style()
         )
 
+        # Command Palette — created once, shown on demand
+        self._command_palette = CommandPalette(self)
+        self._command_palette.widget_selected.connect(self.spawn_widget)
+        self._sb_palette_btn.clicked.connect(self._open_command_palette)
+
+        # Keyboard Shortcuts window — persistent, non-modal, parent=None
+        self._shortcuts_window = KeyboardShortcutsWindow()
+
+        # All global keyboard shortcuts — registered centrally
+        self._register_shortcuts()
+
     # ------------------------------------------------------------------
     # UI setup
     # ------------------------------------------------------------------
@@ -173,6 +186,13 @@ class MainWindow(QMainWindow):
 
         # ---- Help ----
         help_menu = mb.addMenu("Help")
+
+        shortcuts_action = QAction("Keyboard Shortcuts", self)
+        shortcuts_action.triggered.connect(self._show_shortcuts_window)
+        help_menu.addAction(shortcuts_action)
+
+        help_menu.addSeparator()
+
         about_action = QAction("About", self)
         about_action.triggered.connect(self._on_about)
         help_menu.addAction(about_action)
@@ -268,6 +288,16 @@ class MainWindow(QMainWindow):
             "color: #8b949e; font-family: 'Consolas', monospace;"
             " padding: 0 10px 0 0; font-size: 12px;"
         )
+
+        # Command Palette button — permanent, sits left of Logs
+        self._sb_palette_btn = QPushButton("⌘ Widgets")
+        self._sb_palette_btn.setFlat(True)
+        self._sb_palette_btn.setStyleSheet(
+            "QPushButton { color: #8b949e; border: none; background: transparent;"
+            " padding: 0 10px; font-size: 12px; }"
+            "QPushButton:hover { color: #e6edf3; }"
+        )
+        sb.addPermanentWidget(self._sb_palette_btn)
 
         # Logs toggle button — permanent, sits immediately left of the clock
         self._sb_logs_btn = QPushButton("Logs")
@@ -745,6 +775,47 @@ class MainWindow(QMainWindow):
         logger.info("Layout reset to default")
 
     # ------------------------------------------------------------------
+    # Keyboard shortcuts
+    # ------------------------------------------------------------------
+
+    def _register_shortcuts(self) -> None:
+        """Register all global QShortcut bindings on the main window.
+
+        Keep in sync with shortcuts_dialog.py — every shortcut here must
+        have a matching entry in _SECTIONS.
+        """
+        bindings: list[tuple[str, object]] = [
+            # Widget launchers
+            ("Ctrl+W", lambda: self.spawn_widget("watchlist")),
+            ("Ctrl+O", lambda: self.spawn_widget("option_chain")),
+            ("Ctrl+P", lambda: self.spawn_widget("positions")),
+            ("Ctrl+L", self._toggle_log_viewer),
+            # General
+            ("Ctrl+K", self._toggle_command_palette),
+            ("Ctrl+Shift+S", self._save_layout),
+            ("Ctrl+/", self._show_shortcuts_window),
+        ]
+        for key, slot in bindings:
+            sc = QShortcut(QKeySequence(key), self)
+            sc.activated.connect(slot)
+
+    def _show_shortcuts_window(self) -> None:
+        self._shortcuts_window.show_or_raise()
+
+    # ------------------------------------------------------------------
+    # Command Palette
+    # ------------------------------------------------------------------
+
+    def _open_command_palette(self) -> None:
+        self._command_palette.show_centered_on(self)
+
+    def _toggle_command_palette(self) -> None:
+        if self._command_palette.isVisible():
+            self._command_palette.hide()
+        else:
+            self._command_palette.show_centered_on(self)
+
+    # ------------------------------------------------------------------
     # Log Viewer window
     # ------------------------------------------------------------------
 
@@ -806,10 +877,10 @@ class MainWindow(QMainWindow):
             win.force_close()
         self._detached_windows.clear()
 
-        # Hide the standalone log viewer so it doesn't linger after the
-        # main window closes (its own closeEvent only hides, so we must
-        # hide it explicitly here before the app exits).
+        # Hide standalone utility windows so they don't linger after exit.
+        # Their own closeEvent only hides, so we call hide() explicitly here.
         self._log_viewer_window.hide()
+        self._shortcuts_window.hide()
 
         from feed.market_feed import MarketFeed
         try:

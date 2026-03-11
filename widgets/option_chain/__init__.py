@@ -9,5 +9,6 @@ WidgetRegistry.register(
         display_name="Option Chain",
         category="Market Data",
         factory=OptionChainWidget,
+        description="Live strike ladder with OI, Greeks, and IV",
     )
 )

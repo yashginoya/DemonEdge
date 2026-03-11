@@ -269,5 +269,6 @@ WidgetRegistry.register(
         display_name="Watchlist",
         category="Market Data",
         factory=WatchlistWidget,
+        description="Live price tracking for instruments",
     )
 )

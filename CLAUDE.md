@@ -198,6 +198,20 @@ Every widget must:
   - Examples: `"Strike Settings"`, `"Column Visibility"`, `"Add Instrument"`, `"Confirm Order"`.
 - The distinction: standalone windows live in the taskbar / OS window list and need the app name for context; dialogs are always parented to a window and their title is already contextual.
 
+#### Command Palette
+- The Command Palette (`app/command_palette.py`, `CommandPalette`) is opened via **Ctrl+K** or the **⌘ Widgets** button in the status bar.
+- It is the primary way to add widgets. Any widget registered in `WidgetRegistry` is automatically discoverable — no extra registration needed.
+- `WidgetDefinition` has an optional `description: str = ""` field. Set it when registering a widget to provide a one-line description shown in the palette. Falls back to the widget's `category` if omitted.
+- The palette is a `Qt.WindowType.Tool | FramelessWindowHint` top-level window parented to `MainWindow`. It auto-dismisses on window deactivate (click outside), Escape, or after a selection.
+
+#### Keyboard Shortcuts Convention
+- All keyboard shortcuts in DemonEdge must be registered in **two places simultaneously**:
+  1. As a `QShortcut` in `MainWindow._register_shortcuts()` (`app/main_window.py`).
+  2. As an entry in `_SECTIONS` inside `app/shortcuts_dialog.py` — this populates the **Help → Keyboard Shortcuts** window (`Ctrl+/`), which is the single source of truth for what shortcuts exist.
+- Never add a shortcut without updating both. Never list a shortcut in the window that is not actually registered, and vice versa.
+- The `_register_shortcuts()` method is the only place global shortcuts should be created. Do not scatter `QShortcut` instantiation across `__init__` or other methods.
+- The Keyboard Shortcuts window (`KeyboardShortcutsWindow`) is a persistent non-modal `QWidget(None, Qt.Window)` — independent of the main window, stays visible when the terminal loses focus, hides on close (does not destroy). Open via `Ctrl+/` or Help → Keyboard Shortcuts.
+
 ---
 
 ## Documentation (`docs/`)

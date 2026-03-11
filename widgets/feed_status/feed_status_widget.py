@@ -196,5 +196,6 @@ WidgetRegistry.register(
         display_name="Feed Status",
         category="System",
         factory=FeedStatusWidget,
+        description="WebSocket feed health and diagnostics",
     )
 )

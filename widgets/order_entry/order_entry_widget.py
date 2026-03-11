@@ -250,5 +250,6 @@ WidgetRegistry.register(
         display_name="Order Entry",
         category="Orders",
         factory=OrderEntryWidget,
+        description="Place and manage buy/sell orders",
     )
 )

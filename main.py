@@ -19,6 +19,10 @@ def _qt_message_handler(msg_type: QtMsgType, _context, message: str) -> None:
     # QFont::setPointSize warnings produced by pyqtgraph / PySide6 internals
     if "QFont::setPointSize" in message or "point size" in message:
         return
+    # DWM compositor error emitted when WA_TranslucentBackground + FramelessWindowHint
+    # are combined on Windows — harmless but noisy; suppressed at source in the palette.
+    if "UpdateLayeredWindowIndirect" in message:
+        return
     # Let everything else through to stderr (default behaviour)
     if msg_type in (QtMsgType.QtWarningMsg, QtMsgType.QtCriticalMsg, QtMsgType.QtFatalMsg):
         print(f"Qt: {message}", file=sys.stderr)

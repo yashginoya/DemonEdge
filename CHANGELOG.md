@@ -2,6 +2,88 @@
 
 ---
 
+## 2026-03-11 — fix: Change Keyboard Shortcuts shortcut from Ctrl+? to Ctrl+/
+
+### Changed
+- `app/main_window.py` — `_register_shortcuts()`: binding changed from `"Ctrl+?"` to `"Ctrl+/"`.
+- `app/shortcuts_dialog.py` — `_SECTIONS` General entry and module docstring updated to `Ctrl+/`.
+- `CLAUDE.md` — Both occurrences of `Ctrl+?` in the Keyboard Shortcuts Convention replaced with `Ctrl+/`.
+
+---
+
+## 2026-03-11 — fix: Keyboard Shortcuts — non-modal persistent window + Ctrl+?
+
+### Changed
+- `app/shortcuts_dialog.py` — Converted from `QDialog` (modal, blocking, per-trigger instance) to `KeyboardShortcutsWindow` (`QWidget(None, Qt.Window)`, persistent, non-modal). Parent is `None` so the window is fully independent of the main terminal — it stays visible when the terminal loses focus. `closeEvent` calls `event.ignore()` + `self.hide()` so the instance is preserved across open/close cycles. Close button now calls `self.hide()` instead of `self.accept()`. Added `show_or_raise()` public method — shows if hidden, otherwise brings to front. Added `Ctrl+?` entry to the `General` section of `_SECTIONS`. Fixed window height from 340px → 370px to accommodate the extra row.
+- `app/main_window.py` — Import changed from `KeyboardShortcutsDialog` to `KeyboardShortcutsWindow`. `self._shortcuts_window = KeyboardShortcutsWindow()` created once in `__init__` alongside other persistent windows. `_show_shortcuts_dialog()` replaced by `_show_shortcuts_window()` which calls `self._shortcuts_window.show_or_raise()`. Help menu action wired to `_show_shortcuts_window`. Added `("Ctrl+?", self._show_shortcuts_window)` to `_register_shortcuts()`. `closeEvent` now calls `self._shortcuts_window.hide()` so it closes cleanly on terminal exit.
+- `CLAUDE.md` — Updated Keyboard Shortcuts Convention: notes window is `QWidget(None, Qt.Window)` non-modal persistent; updated file reference from `shortcuts_dialog` (dialog) to window; added `Ctrl+?` mention.
+
+### Architecture Decisions
+- `KeyboardShortcutsWindow` follows the same persistent-instance pattern as `LogViewerWindow` — created once at startup, shown/hidden on demand, cleaned up in `MainWindow.closeEvent`. Parent `None` is intentional: parenting to `MainWindow` would make the window minimize/hide with the terminal.
+
+---
+
+## 2026-03-11 — feat: Global keyboard shortcuts + Keyboard Shortcuts dialog
+
+### Added
+- `app/shortcuts_dialog.py` — New `KeyboardShortcutsDialog` (`QDialog`, title "Keyboard Shortcuts"). Shows a two-column (Action / Shortcut) reference table grouped into sections: **Widgets** and **General**. Shortcut keys rendered as styled monospace pills (`#58a6ff` text, `#161b22` background, `1px solid #30363d` border, `border-radius: 4px`). Fixed size 400×340, non-resizable, with a Close button. `_SECTIONS` list at the top of the file is the single source of truth for the dialog content.
+
+### Changed
+- `app/main_window.py` — Replaced the inline `QShortcut(QKeySequence("Ctrl+K"), ...)` call with a central `_register_shortcuts()` method that registers all global shortcuts in one place. Added shortcuts: `Ctrl+W` → new Watchlist, `Ctrl+O` → new Option Chain, `Ctrl+P` → new Positions & P&L, `Ctrl+L` → toggle Log Viewer, `Ctrl+K` → toggle Command Palette (migrated from inline), `Ctrl+Shift+S` → Save Layout. Each shortcut calls the same code path as the Command Palette / "+ Add Widget" menu — no duplicated creation logic. Added `_show_shortcuts_dialog()` method. Added `KeyboardShortcutsDialog` import. Added "Keyboard Shortcuts" action to Help menu (above a separator, then About).
+- `CLAUDE.md` — Added **Keyboard Shortcuts Convention** rule under Naming Conventions: all shortcuts must be registered in both `_register_shortcuts()` and `_SECTIONS` in `shortcuts_dialog.py`; the dialog is the single source of truth.
+
+### Architecture Decisions
+- `_register_shortcuts()` centralises all `QShortcut` creation so it is impossible to add a shortcut in one place and forget the other. The comment in the method body explicitly cross-references `shortcuts_dialog.py`.
+- `shortcuts_dialog.py` owns `_SECTIONS` as a plain data structure (list of tuples) rather than deriving it from the registered shortcuts at runtime — keeps the dialog dependency-free and allows full control over display names and grouping independent of widget IDs.
+
+---
+
+## 2026-03-11 — fix: Command Palette — Windows rendering errors + UI polish
+
+### Fixed
+- `app/command_palette.py` — Removed `WA_TranslucentBackground` from the `CommandPalette` window; this attribute combined with `FramelessWindowHint` on Windows causes `Qt: UpdateLayeredWindowIndirect failed` DWM compositor errors. Removed `QGraphicsDropShadowEffect` for the same reason (shadow effects require a composited transparent window). Replaced with a solid opaque `#1a1a1a` background; visual depth is now communicated via a `1px solid #3a3a3a` border on the inner `QFrame`. Removed `WA_TranslucentBackground` from `_ResultRow` (child widgets do not need this attribute; `background: transparent` in the stylesheet is sufficient for the selection highlight to show through).
+- `main.py` — Added `"UpdateLayeredWindowIndirect"` to the `_qt_message_handler` suppression list as a belt-and-suspenders fallback in case any future code re-introduces the transparent window pattern.
+
+### Changed
+- `app/command_palette.py` — UI polish:
+  - Palette width increased from 480px → 500px.
+  - Vertical position changed to `geo.y() + geo.height() // 5` (VS Code-style — appears below the top fifth of the main window, not dead-centre vertically).
+  - Search field font 15px → 14px; padding 14px → 12px.
+  - Row height 62px → 56px.
+  - Description label colour changed from `#6e7681` → `#888888` (slightly lighter muted grey).
+  - Selection / hover highlight colour changed from `#252d3a` → `#1f3050` (clearer blue accent).
+  - Panel `border-radius` increased from 8px → 10px.
+  - Added "No widgets found" `QLabel` (centred, muted `#484f58`) shown when the filtered list is empty; list widget is hidden in this state.
+  - Extracted long stylesheet strings into module-level constants (`_PANEL_QSS`, `_SEARCH_QSS`, `_LIST_QSS`) for readability.
+
+---
+
+## 2026-03-11 — feat: Command Palette (Ctrl+K widget launcher)
+
+### Added
+- `app/command_palette.py` — New `CommandPalette` class. A frameless `Qt.WindowType.Tool` floating window centered on the main window. Contains a large search input (auto-focused on open) and a scrollable results list. Each row shows an emoji icon chip, widget display name (matched portion highlighted in blue), and a short description. Supports: live fuzzy+substring filtering as-you-type, arrow key navigation, Enter/click to launch, Escape or click-outside to dismiss. Max 6 visible rows; scrollable beyond that. Styled dark (`#1a1a1a`) with rounded corners (8px), a `QGraphicsDropShadowEffect` for depth, and `#252d3a` hover/selection highlight. Auto-dismisses via `WindowDeactivate` event.
+- `_ResultRow` (inner class in `command_palette.py`) — Per-row widget with transparent background so QListWidget hover styling shows through. Icon chip uses `WidgetDefinition.icon` or a category-based emoji fallback (`📈` Market Data, `📋` Orders, `⚙` System).
+
+### Changed
+- `app/widget_registry.py` — `WidgetDefinition` dataclass: added `description: str = ""` optional field. Backward-compatible; all existing registrations with no description fall back to showing the category name in the palette.
+- `app/main_window.py` — Added `CommandPalette` import. Instantiated `self._command_palette` in `__init__`; connected `widget_selected` → `spawn_widget`. Added `⌘ Widgets` `QPushButton` to the status bar as a permanent widget, placed immediately left of the existing `Logs` button. Added `Ctrl+K` `QShortcut` that toggles the palette (open if hidden, hide if visible). Added `_open_command_palette()` and `_toggle_command_palette()` methods.
+- `CLAUDE.md` — Added **Command Palette** section under Naming Conventions / UI Conventions describing Ctrl+K, `WidgetDefinition.description`, and the window type.
+- Widget registrations — added `description` to all six existing widgets:
+  - `widgets/watchlist/watchlist_widget.py` → `"Live price tracking for instruments"`
+  - `widgets/chart/chart_widget.py` → `"Candlestick / OHLCV price chart"`
+  - `widgets/order_entry/order_entry_widget.py` → `"Place and manage buy/sell orders"`
+  - `widgets/positions/positions_widget.py` → `"Open positions with live unrealised P&L"`
+  - `widgets/feed_status/feed_status_widget.py` → `"WebSocket feed health and diagnostics"`
+  - `widgets/option_chain/__init__.py` → `"Live strike ladder with OI, Greeks, and IV"`
+
+### Architecture Decisions
+- The palette is a `Qt.WindowType.Tool | FramelessWindowHint` window parented to `MainWindow`. `Tool` keeps it off the taskbar, above its parent, and auto-hides with the parent. `changeEvent(WindowDeactivate)` handles click-outside dismissal — simpler and more reliable than an application-level event filter.
+- The palette reads directly from `WidgetRegistry.get_all()` — it shares the same registry as the View → Add Widget menu with no separate list. Any new widget registered automatically appears in the palette.
+- `_fuzzy_score` uses exact substring (score = match position, lower is better) with a fuzzy fallback (all chars appear in order, score = 1000 + last position, deprioritized). This keeps simple queries fast while still surfacing results for typos.
+- `_ResultRow` uses `WA_TranslucentBackground` + `background: transparent` stylesheet so the `QListWidget::item:hover` / `::item:selected` background paint behind it correctly.
+
+---
+
 ## 2026-03-11 — fix: Remove internal toolbar from DetachedWindow
 
 ### Changed

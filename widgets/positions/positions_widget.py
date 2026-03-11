@@ -294,5 +294,6 @@ WidgetRegistry.register(
         display_name="Positions & P&L",
         category="Orders",
         factory=PositionsWidget,
+        description="Open positions with live unrealised P&L",
     )
 )

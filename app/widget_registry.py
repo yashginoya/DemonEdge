@@ -14,6 +14,7 @@ class WidgetDefinition:
     category: str
     factory: Callable[[], "BaseWidget"]
     icon: str = ""
+    description: str = ""
 
 
 class _WidgetRegistry:

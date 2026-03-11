@@ -271,5 +271,6 @@ WidgetRegistry.register(
         display_name="Chart",
         category="Market Data",
         factory=ChartWidget,
+        description="Candlestick / OHLCV price chart",
     )
 )
