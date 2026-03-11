@@ -2,6 +2,22 @@
 
 ---
 
+## 2026-03-11 — fix: Option Chain OI and OI Chg columns always showing —
+
+### Fixed
+- `models/tick.py` — Added `open_interest: int | None` and `open_interest_change: int | None` fields (SNAP_QUOTE-only, both default to `None`).
+- `feed/market_feed.py` — `_parse_tick()`: for SNAP_QUOTE mode, now extracts `open_interest` (raw int64, contract count) and `open_interest_change` (from the `open_interest_change_percentage` field — this field is stored as int64 in Angel One's binary protocol and represents the absolute OI change from the previous day despite its misleading name). Both fields are `None` in LTP and QUOTE modes.
+- `widgets/option_chain/option_chain_widget.py` — `_on_tick_ui()`: replaced hardcoded `oi = 0` / `oi_change = 0` with `tick.open_interest or 0` / `tick.open_interest_change or 0`. OI and OI Chg columns now reflect live data. Color coding (green = OI increased, red = OI decreased) already present in the model.
+
+### Diagnosis
+- **Subscription mode was already correct**: option chain chain tokens were already subscribed with `SubscriptionMode.SNAP_QUOTE` (mode 3), which is the only mode that includes OI data.
+- **Root cause**: `Tick` model had no OI fields, `_parse_tick()` was never extended to extract them, and `_on_tick_ui()` hardcoded both to 0.
+
+### Architecture Decisions
+- `open_interest_change` maps to the `open_interest_change_percentage` binary field — the library name is misleading; the value is int64 (absolute contract count), not a percentage. A comment in `_parse_tick()` documents this discrepancy.
+
+---
+
 ## 2026-03-11 — fix: Remove "DemonEdge - " prefix from QDialog titles
 
 ### Changed

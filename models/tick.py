@@ -28,3 +28,12 @@ class Tick:
     high: float | None = None
     low: float | None = None
     close: float | None = None
+
+    # SNAP_QUOTE-only fields — None in LTP / QUOTE mode
+    # open_interest: current OI in contracts (raw int64 from Angel One binary protocol)
+    # open_interest_change: change from previous day's OI in contracts (raw int64;
+    #   the SmartWebSocketV2 library names this field "open_interest_change_percentage"
+    #   but it is stored as int64 — it represents the absolute contract count change,
+    #   not a percentage)
+    open_interest: int | None = None
+    open_interest_change: int | None = None

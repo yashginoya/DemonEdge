@@ -381,7 +381,7 @@ class OptionChainWidget(BaseWidget):
         self._table.setModel(self._model)
         header = OptionChainHeaderView(self._table)
         self._table.setHorizontalHeader(header)
-        self._table.horizontalHeader().setStretchLastSection(False)
+        self._table.horizontalHeader().setStretchLastSection(True)
         self._table.verticalHeader().setVisible(False)
         self._table.setAlternatingRowColors(False)
         self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -692,11 +692,10 @@ class OptionChainWidget(BaseWidget):
     # ------------------------------------------------------------------
 
     def _on_tick_ui(self, tick: Tick, side: str) -> None:
-        ltp    = tick.ltp
-        volume = tick.volume or 0
-        # OI not currently parsed by MarketFeed._parse_tick; default to 0
-        oi        = 0
-        oi_change = 0
+        ltp       = tick.ltp
+        volume    = tick.volume or 0
+        oi        = tick.open_interest or 0
+        oi_change = tick.open_interest_change or 0
 
         T = self._time_to_expiry()
 
