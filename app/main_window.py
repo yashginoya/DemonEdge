@@ -102,6 +102,8 @@ class MainWindow(QMainWindow):
         self._instance_counters: dict[str, int] = {}
         # Detached windows: instance_id → DetachedWindow
         self._detached_windows: dict[str, DetachedWindow] = {}
+        # Standalone Market Depth windows (not docked)
+        self._market_depth_windows: list = []
 
         # Build UI shell
         self._setup_menu()
@@ -460,7 +462,7 @@ class MainWindow(QMainWindow):
         widget_id: str,
         area: Qt.DockWidgetArea = Qt.DockWidgetArea.RightDockWidgetArea,
         floating: bool = True,
-    ) -> BaseWidget:
+    ) -> "BaseWidget | None":
         """Create a new widget instance, add it to the dock, and register it.
 
         Parameters
@@ -471,6 +473,11 @@ class MainWindow(QMainWindow):
             centre of the main window.  Pass False when building the initial
             or restored layout so widgets dock in place.
         """
+        # Market Depth is a standalone OS window — never docked
+        if widget_id == "market_depth":
+            self._open_market_depth()
+            return None
+
         n = self._instance_counters.get(widget_id, 0)
         instance_id = f"{widget_id}_{n}"
         self._instance_counters[widget_id] = n + 1
@@ -524,6 +531,33 @@ class MainWindow(QMainWindow):
         if instance_id in self._active_widgets:
             self._active_widgets.pop(instance_id)
             logger.debug("Widget deregistered: %s", instance_id)
+
+    def _open_market_depth(self) -> None:
+        """Open a new standalone Market Depth window (multiple instances allowed)."""
+        from widgets.market_depth.market_depth_widget import MarketDepthWindow
+
+        win = MarketDepthWindow()
+
+        def _on_closed(w: MarketDepthWindow = win) -> None:
+            try:
+                self._market_depth_windows.remove(w)
+            except ValueError:
+                pass
+
+        win.window_closed.connect(_on_closed)
+        self._market_depth_windows.append(win)
+
+        # Position near (but visibly offset from) the main window centre,
+        # cascading each additional instance by 30px.
+        n = len(self._market_depth_windows)
+        offset = (n - 1) * 30
+        mw_geo = self.geometry()
+        x = mw_geo.center().x() - 360 + offset
+        y = mw_geo.center().y() - 150 + offset
+        win.move(x, y)
+        win.show()
+        win.raise_()
+        logger.debug("MarketDepthWindow opened (total open: %d)", n)
 
     def get_first_widget_of_type(self, widget_id: str) -> "BaseWidget | None":
         """Return the first active widget with the given widget_id, or None."""
@@ -878,6 +912,11 @@ class MainWindow(QMainWindow):
         for win in list(self._detached_windows.values()):
             win.force_close()
         self._detached_windows.clear()
+
+        # Close all standalone Market Depth windows.
+        for win in list(self._market_depth_windows):
+            win.close()
+        self._market_depth_windows.clear()
 
         # Hide standalone utility windows so they don't linger after exit.
         # Their own closeEvent only hides, so we call hide() explicitly here.

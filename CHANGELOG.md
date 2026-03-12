@@ -2,6 +2,67 @@
 
 ---
 
+## 2026-03-12 — fix: Market Depth Volume and OI display raw Indian-formatted integers
+
+### Fixed
+- `widgets/market_depth/market_depth_widget.py` — Volume and OI in the quote grid were being shown with Cr/L unit conversion via `_fmt_vol`. Added `_fmt_indian()` helper that formats large integers with Indian-style comma grouping (e.g. `17184554` → `1,71,84,554`) and no unit conversion. The `_vol` local wrapper inside `_QuoteGrid.refresh_tick()` now calls `_fmt_indian` instead of `_fmt_vol`. All other fields (`ltq`, `ltt`, price fields) are unchanged.
+
+---
+
+## 2026-03-12 — feat: Market Depth window closes on Escape
+
+### Changed
+- `widgets/market_depth/market_depth_widget.py` — Added `keyPressEvent` override to `MarketDepthWindow`. Pressing `Escape` calls `self.close()`; all other keys pass through to `super()`.
+
+---
+
+## 2026-03-12 — fix: Market Depth window stays on top
+
+### Changed
+- `widgets/market_depth/market_depth_widget.py` — Added `Qt.WindowType.WindowStaysOnTopHint` flag alongside `Qt.WindowType.Window` in `MarketDepthWindow.__init__()`. The window now remains above the main terminal and other application windows at all times. Movable, resizable, and closable behaviour is unchanged.
+
+---
+
+## 2026-03-12 — feat: Market Depth — compact header row + auto-focus search
+
+### Changed
+- `widgets/market_depth/market_depth_widget.py` — **Fix 1 (compact header):** Removed the separate 64px LTP header row. Merged symbol label, LTP label, change label, and search box into a single 34px `header_row` `QHBoxLayout`. LTP font reduced from 22pt to 12pt bold. `_LTP_H = 64` constant removed; `fixed_h` updated to `_SEARCH_H + depth_table_h + _RATIO_H + _TOTALS_H`. `QPushButton` removed from imports, `QLineEdit` added.
+- `widgets/market_depth/market_depth_widget.py` — **Fix 2 (auto-focus search):** `QPushButton("⌕ Search")` replaced with `QLineEdit` (`_search_box`) with placeholder text `"⌕  Search symbol…"`. `returnPressed` signal connected to `_open_search()`. `showEvent` override added — uses `QTimer.singleShot(0, …)` to focus and select-all the search box after the window is rendered. `_open_search` clears the search box text after the dialog opens.
+
+---
+
+## 2026-03-12 — feat: Market Depth — standalone window, compact height, tight grid
+
+### Changed
+- `widgets/market_depth/market_depth_widget.py` — **Fix 1 (quote grid spacing):** `_QuoteGrid._build()` margins reduced to 4px (from 8/6), vertical row spacing reduced to 2px (from 5). No `addStretch` in the grid layout. **Fix 2 (fixed height):** `MarketDepthWindow._build_ui()` measures the depth table header via `sizeHint().height()` then computes `fixed_h = SEARCH_H + LTP_H + depth_table_h + RATIO_H + TOTALS_H` and calls `self.setFixedHeight(fixed_h)` to prevent vertical resizing. **Fix 3 (standalone window):** Replaced `MarketDepthWidget(BaseWidget)` (QDockWidget subclass) with `MarketDepthWindow(QWidget)` using `Qt.WindowType.Window` and `parent=None`. Window title `"DemonEdge - Market Depth"`. Own feed subscription management (`_subscribe_feed` / `_unsubscribe_all_feeds`) instead of BaseWidget helpers. `closeEvent` unsubscribes all feeds, emits `window_closed`, accepts. `widget_id = "market_depth"` and WidgetRegistry entry retained so Command Palette still shows the widget. Multiple instances supported. No changes to tick data mapping or quote field update logic.
+- `app/main_window.py` — `spawn_widget()` intercepts `widget_id == "market_depth"` and calls `_open_market_depth()` instead of the dock flow (returns `None`). Added `_open_market_depth()`: creates a `MarketDepthWindow`, tracks it in `self._market_depth_windows`, connects `window_closed` for cleanup, cascades position by 30px per instance. `closeEvent` closes all entries in `_market_depth_windows` before exit.
+
+---
+
+## 2026-03-12 — feat: Market Depth — side-by-side depth/quote layout
+
+### Changed
+- `widgets/market_depth/market_depth_widget.py` — Restructured widget body to a horizontal `QSplitter`: left panel holds the depth table + bid/ask ratio bar + total-qty row; right panel holds the quote details grid in a scroll area. Symbol search bar and LTP/change header remain full-width above the split. Default split sizes: 360px (depth) / 260px (quote). Both panels are non-collapsible. Minimum widget size set to 620×320px. Added `QSplitter` to imports. No changes to data mapping, subscription logic, or field update logic.
+
+---
+
+## 2026-03-12 — fix: Market Depth quote grid flicker (None-value guard)
+
+### Fixed
+- `widgets/market_depth/market_depth_widget.py` — **Quote grid flickering / clearing to `—`**. Root cause: Angel One WebSocket sends two ticks in rapid succession — one full SNAP_QUOTE packet (with Open, High, Low, Volume, etc.) and one LTP-only packet (all quote fields `None`). The LTP-only tick was overwriting the valid data with `—`. Fix: `_QuoteGrid.refresh_tick()` now skips any field whose incoming value is `None`, preserving the last known-good value on screen. Each field is guarded individually so partial-data ticks still update whichever fields they carry. Helper wrappers `_price`, `_vol`, `_qty` return `None` (skip sentinel) instead of `_DASH` when the source value is `None`; the inner `_s()` helper only calls `setText` when the formatted value is not `None`.
+- `widgets/market_depth/market_depth_widget.py` — Downgraded `refresh_tick` log from `WARNING` to `DEBUG` to stop flooding the log at tick rate.
+- `feed/market_feed.py` — Removed one-shot raw SNAP_QUOTE debug dump (`_snap_logged` class var + `logger.warning` call) added in previous session for diagnosis.
+
+---
+
+## 2026-03-12 — fix: Market Depth widget — quote grid and LTP header polish
+
+### Fixed
+- `widgets/market_depth/market_depth_widget.py` — **Quote grid never updated** (showed `—` for all fields after tick arrival). Root cause: `_QuoteGrid` defined a method `update(self, tick)` which shadows `QWidget.update()` — PySide6 routes the C++ repaint signal through the method, causing it to be called with no arguments and silently fail. Fix: method renamed to `refresh_tick()` in both definition and call site (`_on_tick_ui` line 598).
+- `widgets/market_depth/market_depth_widget.py` — **LTP header layout** — switched from `QHBoxLayout` (LTP and change side-by-side, 46px height) to `QVBoxLayout` (stacked, 64px height). LTP font size increased 18 → 22px. Change/change% label is now on its own line directly below LTP (12px, left-aligned). Both labels left-aligned with `contentsMargins(10, 6, 10, 6)` and `setSpacing(2)`.
+
+---
+
 ## 2026-03-11 — feat: Market Depth & Quote widget (F5)
 
 ### Added

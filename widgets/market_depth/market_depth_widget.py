@@ -1,19 +1,20 @@
-"""Market Depth & Quote widget — live 5-level order book with full SNAP_QUOTE data."""
+"""Market Depth — standalone OS window with live 5-level order book and full quote."""
 from __future__ import annotations
 
-from datetime import datetime
+from typing import Callable
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtGui import QCloseEvent, QColor, QFont
 from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QProgressBar,
-    QPushButton,
     QScrollArea,
     QSizePolicy,
+    QSplitter,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -24,23 +25,28 @@ from feed.feed_models import SubscriptionMode
 from models.instrument import Instrument
 from models.tick import Tick
 from utils.logger import get_logger
-from widgets.base_widget import BaseWidget
 
 logger = get_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # Colour palette
 # ---------------------------------------------------------------------------
-_GREEN = "#3fb950"
-_RED = "#f85149"
-_MUTED = "#8b949e"
-_FG = "#e6edf3"
+_GREEN  = "#3fb950"
+_RED    = "#f85149"
+_MUTED  = "#8b949e"
+_FG     = "#e6edf3"
 _FG_DIM = "#c9d1d9"
-_BG = "#0d1117"
-_BG2 = "#161b22"
+_BG     = "#0d1117"
+_BG2    = "#161b22"
 _BORDER = "#21262d"
 
 _DASH = "—"
+
+# Fixed-height constants used to compute the locked window height.
+_SEARCH_H = 34   # single combined header row (symbol + LTP + change + search)
+_ROW_H    = 26   # each depth-table row
+_RATIO_H  = 6    # bid/ask ratio bar
+_TOTALS_H = 26   # total-qty row
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -73,8 +79,32 @@ def _fmt_vol(v: int | None) -> str:
     return f"{v:,}"
 
 
-def _lbl(text: str, colour: str = _MUTED, bold: bool = False, align=Qt.AlignmentFlag.AlignLeft) -> QLabel:
-    """Create a small styled QLabel."""
+def _fmt_indian(v: int | float | None) -> str:
+    """Format a large integer with Indian-style comma grouping (no unit conversion).
+
+    e.g. 17184554 → '1,71,84,554'
+    """
+    if v is None:
+        return _DASH
+    n = int(v)
+    s = str(n)
+    if len(s) <= 3:
+        return s
+    # last 3 digits, then groups of 2
+    result = s[-3:]
+    s = s[:-3]
+    while s:
+        result = s[-2:] + "," + result
+        s = s[:-2]
+    return result
+
+
+def _lbl(
+    text: str,
+    colour: str = _MUTED,
+    bold: bool = False,
+    align=Qt.AlignmentFlag.AlignLeft,
+) -> QLabel:
     w = QLabel(text)
     style = f"color: {colour}; font-size: 11px;"
     if bold:
@@ -85,7 +115,6 @@ def _lbl(text: str, colour: str = _MUTED, bold: bool = False, align=Qt.Alignment
 
 
 def _val(text: str = _DASH, align=Qt.AlignmentFlag.AlignRight) -> QLabel:
-    """Create a value QLabel (white, right-aligned, mono)."""
     w = QLabel(text)
     w.setStyleSheet(
         f"color: {_FG}; font-size: 11px;"
@@ -115,7 +144,7 @@ class _RatioBar(QProgressBar):
         self.setRange(0, 1000)
         self.setValue(500)
         self.setTextVisible(False)
-        self.setFixedHeight(6)
+        self.setFixedHeight(_RATIO_H)
         self.setStyleSheet(
             f"QProgressBar {{ background: {_RED}; border: none; border-radius: 3px; }}"
             f"QProgressBar::chunk {{ background: {_GREEN}; border-radius: 3px; }}"
@@ -134,11 +163,11 @@ class _RatioBar(QProgressBar):
 # ---------------------------------------------------------------------------
 
 _DEPTH_COLS = ["Qty", "Orders", "Bid Price", "Ask Price", "Orders", "Qty"]
-_N_LEVELS = 5
+_N_LEVELS   = 5
 
 
 class _DepthTable(QTableWidget):
-    """5-level order book table. Left: bids, right: asks."""
+    """5-level order book table. Left: bids (green), right: asks (red)."""
 
     def __init__(self) -> None:
         super().__init__(_N_LEVELS, 6)
@@ -158,7 +187,6 @@ class _DepthTable(QTableWidget):
             "QTableWidget::item { padding: 0 6px; border: none; }"
         )
 
-        # Column stretching
         hh = self.horizontalHeader()
         hh.setDefaultSectionSize(60)
         hh.setSectionResizeMode(0, hh.ResizeMode.Stretch)
@@ -172,11 +200,12 @@ class _DepthTable(QTableWidget):
         self.setColumnWidth(3, 80)
         self.setColumnWidth(4, 50)
 
-        self.verticalHeader().setDefaultSectionSize(26)
-
+        self.verticalHeader().setDefaultSectionSize(_ROW_H)
         self._populate_empty()
 
-    def _make_item(self, text: str, colour: str, align: Qt.AlignmentFlag) -> QTableWidgetItem:
+    def _make_item(
+        self, text: str, colour: str, align: Qt.AlignmentFlag
+    ) -> QTableWidgetItem:
         item = QTableWidgetItem(text)
         item.setForeground(QColor(colour))
         item.setTextAlignment(align | Qt.AlignmentFlag.AlignVCenter)
@@ -189,12 +218,8 @@ class _DepthTable(QTableWidget):
     def _set_row(
         self,
         row: int,
-        bqty: str,
-        bord: str,
-        bprice: str,
-        aprice: str,
-        aord: str,
-        aqty: str,
+        bqty: str, bord: str, bprice: str,
+        aprice: str, aord: str, aqty: str,
     ) -> None:
         ra = Qt.AlignmentFlag.AlignRight
         la = Qt.AlignmentFlag.AlignLeft
@@ -206,21 +231,16 @@ class _DepthTable(QTableWidget):
         self.setItem(row, 5, self._make_item(aqty,   _FG_DIM, la))
 
     def update_depth(self, buy_levels, sell_levels) -> None:
-        """Update table with new depth data. Lists may be shorter than 5."""
         for i in range(_N_LEVELS):
             if i < len(buy_levels):
                 b = buy_levels[i]
-                bprice = _fmt_price(b.price)
-                bqty = _fmt_qty(b.quantity)
-                bord = str(b.orders)
+                bprice, bqty, bord = _fmt_price(b.price), _fmt_qty(b.quantity), str(b.orders)
             else:
                 bprice = bqty = bord = _DASH
 
             if i < len(sell_levels):
                 s = sell_levels[i]
-                aprice = _fmt_price(s.price)
-                aqty = _fmt_qty(s.quantity)
-                aord = str(s.orders)
+                aprice, aqty, aord = _fmt_price(s.price), _fmt_qty(s.quantity), str(s.orders)
             else:
                 aprice = aqty = aord = _DASH
 
@@ -236,13 +256,13 @@ class _DepthTable(QTableWidget):
 
 _QUOTE_FIELDS: list[tuple[str, str, str, str]] = [
     # (left_label, left_key, right_label, right_key)
-    ("Open",       "open",    "High",      "high"),
-    ("Low",        "low",     "Prev Close","close"),
-    ("Avg Price",  "atp",     "Volume",    "volume"),
-    ("OI",         "oi",      "LTQ",       "ltq"),
-    ("LTT",        "ltt",     "LCL",       "lcl"),
-    ("UCL",        "ucl",     "52W High",  "w52h"),
-    ("52W Low",    "w52l",    "",          ""),
+    ("Open",      "open",  "High",      "high"),
+    ("Low",       "low",   "Prev Close","close"),
+    ("Avg Price", "atp",   "Volume",    "volume"),
+    ("OI",        "oi",    "LTQ",       "ltq"),
+    ("LTT",       "ltt",   "LCL",       "lcl"),
+    ("UCL",       "ucl",   "52W High",  "w52h"),
+    ("52W Low",   "w52l",  "",          ""),
 ]
 
 
@@ -254,9 +274,10 @@ class _QuoteGrid(QWidget):
 
     def _build(self) -> None:
         grid = QGridLayout(self)
-        grid.setContentsMargins(8, 6, 8, 6)
-        grid.setHorizontalSpacing(10)
-        grid.setVerticalSpacing(5)
+        # Fix 1: tight margins and minimal row spacing
+        grid.setContentsMargins(4, 4, 4, 4)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(2)
         grid.setColumnStretch(1, 1)
         grid.setColumnStretch(3, 1)
 
@@ -273,55 +294,85 @@ class _QuoteGrid(QWidget):
                 grid.addWidget(lbl_r, row_idx, 2)
                 grid.addWidget(val_r, row_idx, 3)
                 self._vals[rk] = val_r
+        # No addStretch — grid sits at natural height
 
     def reset(self) -> None:
         for v in self._vals.values():
             v.setText(_DASH)
 
-    def update(self, tick: Tick) -> None:  # type: ignore[override]
-        def _s(key: str, text: str) -> None:
-            if key in self._vals:
+    def refresh_tick(self, tick: Tick) -> None:
+        """Update quote labels from a Tick, skipping any field that is None.
+
+        Angel One sends two ticks in rapid succession — one with full SNAP_QUOTE
+        data and one with only LTP (all quote fields None).  Skipping None values
+        keeps the last known-good value on screen instead of flickering to '—'.
+        Named refresh_tick (not update) to avoid shadowing QWidget.update().
+        """
+        logger.debug(
+            "QuoteGrid.refresh_tick: close=%s vol=%s open=%s",
+            tick.close, tick.volume, tick.open,
+        )
+
+        def _s(key: str, text: str | None) -> None:
+            if text is not None and key in self._vals:
                 self._vals[key].setText(text)
 
-        _s("open",   _fmt_price(tick.open))
-        _s("high",   _fmt_price(tick.high))
-        _s("low",    _fmt_price(tick.low))
-        _s("close",  _fmt_price(tick.close))
-        _s("atp",    _fmt_price(tick.average_traded_price))
-        _s("volume", _fmt_vol(tick.volume))
-        _s("oi",     _fmt_vol(tick.open_interest))
-        _s("ltq",    _fmt_qty(tick.last_traded_quantity))
-        _s("lcl",    _fmt_price(tick.lower_circuit_limit))
-        _s("ucl",    _fmt_price(tick.upper_circuit_limit))
-        _s("w52h",   _fmt_price(tick.week_52_high))
-        _s("w52l",   _fmt_price(tick.week_52_low))
+        def _price(v: float | None) -> str | None:
+            return None if v is None else _fmt_price(v)
 
-        if tick.last_traded_time:
+        def _vol(v: int | float | None) -> str | None:
+            return None if v is None else _fmt_indian(v)
+
+        def _qty(v: int | float | None) -> str | None:
+            return None if v is None else _fmt_qty(v)
+
+        _s("open",   _price(tick.open))
+        _s("high",   _price(tick.high))
+        _s("low",    _price(tick.low))
+        _s("close",  _price(tick.close))
+        _s("atp",    _price(tick.average_traded_price))
+        _s("volume", _vol(tick.volume))
+        _s("oi",     _vol(tick.open_interest))
+        _s("ltq",    _qty(tick.last_traded_quantity))
+        _s("lcl",    _price(tick.lower_circuit_limit))
+        _s("ucl",    _price(tick.upper_circuit_limit))
+        _s("w52h",   _price(tick.week_52_high))
+        _s("w52l",   _price(tick.week_52_low))
+
+        if tick.last_traded_time is not None:
             _s("ltt", tick.last_traded_time.strftime("%H:%M:%S"))
-        else:
-            _s("ltt", _DASH)
 
 
 # ---------------------------------------------------------------------------
-# Market Depth Widget
+# Market Depth standalone window
 # ---------------------------------------------------------------------------
 
-class MarketDepthWidget(BaseWidget):
-    """Live 5-level market depth and full quote panel.
+class MarketDepthWindow(QWidget):
+    """Live 5-level market depth and full quote — standalone OS window.
 
-    Subscribes to SNAP_QUOTE mode (mode 3) for the selected symbol,
-    which provides depth, OI, circuit limits, 52W range, and all quote fields.
+    Opened via F5, Command Palette, or View → Add Widget.  Multiple instances
+    are allowed; each launch creates an independent window.  Parent is None so
+    the window is not minimised with the main terminal.
+
+    Window title: "DemonEdge - Market Depth" per CLAUDE.md convention.
     """
 
-    widget_id = "market_depth"
+    widget_id = "market_depth"  # kept for WidgetRegistry discoverability
 
     # Signal bridge: feed thread → Qt main thread
     _tick_arrived = Signal(object)  # Tick
 
+    # Emitted just before the window is destroyed so MainWindow can clean up
+    window_closed = Signal()
+
     def __init__(self) -> None:
-        super().__init__("Market Depth")
+        super().__init__(None, Qt.WindowType.Window | Qt.WindowType.WindowStaysOnTopHint)
+        self.setWindowTitle("DemonEdge - Market Depth")
+
         self._instrument: Instrument | None = None
         self._prev_ltp: float = 0.0
+        # Feed subscriptions managed directly (no BaseWidget helper)
+        self._feed_subs: list[tuple[str, str, Callable]] = []
 
         self._build_ui()
         self._tick_arrived.connect(self._on_tick_ui)
@@ -331,84 +382,88 @@ class MarketDepthWidget(BaseWidget):
     # ------------------------------------------------------------------
 
     def _build_ui(self) -> None:
-        root = QWidget()
-        root.setStyleSheet(f"background: {_BG};")
-        self.setWidget(root)
+        self.setStyleSheet(f"background: {_BG};")
+        self.setMinimumWidth(720)
 
-        layout = QVBoxLayout(root)
+        layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # ---- Symbol search bar ----
-        search_row = QWidget()
-        search_row.setStyleSheet(f"background: {_BG2};")
-        search_row.setFixedHeight(34)
-        sl = QHBoxLayout(search_row)
-        sl.setContentsMargins(8, 4, 8, 4)
-        sl.setSpacing(6)
+        # ---- Combined header row: symbol · LTP · change · [Search] ----
+        header_row = QWidget()
+        header_row.setStyleSheet(
+            f"background: {_BG2}; border-bottom: 1px solid {_BORDER};"
+        )
+        header_row.setFixedHeight(_SEARCH_H)
+        hl = QHBoxLayout(header_row)
+        hl.setContentsMargins(8, 4, 8, 4)
+        hl.setSpacing(0)
 
         self._symbol_label = QLabel("No symbol selected")
         self._symbol_label.setStyleSheet(
             f"color: {_MUTED}; font-size: 12px; background: transparent;"
         )
-        self._symbol_label.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
-        )
-
-        self._search_btn = QPushButton("⌕ Search")
-        self._search_btn.setFixedHeight(24)
-        self._search_btn.setStyleSheet(
-            f"QPushButton {{ background: {_BG}; color: {_MUTED}; border: 1px solid {_BORDER};"
-            f" border-radius: 4px; font-size: 11px; padding: 0 8px; }}"
-            f"QPushButton:hover {{ color: {_FG}; border-color: #58a6ff; }}"
-        )
-        self._search_btn.clicked.connect(self._open_search)
-
-        sl.addWidget(self._symbol_label, 1)
-        sl.addWidget(self._search_btn)
-        layout.addWidget(search_row)
-
-        # ---- LTP header ----
-        header = QWidget()
-        header.setStyleSheet(f"background: {_BG}; border-bottom: 1px solid {_BORDER};")
-        header.setFixedHeight(46)
-        hl = QHBoxLayout(header)
-        hl.setContentsMargins(10, 4, 10, 4)
 
         self._ltp_label = QLabel(_DASH)
         ltp_font = QFont()
-        ltp_font.setPointSize(18)
+        ltp_font.setPointSize(12)
         ltp_font.setBold(True)
         self._ltp_label.setFont(ltp_font)
         self._ltp_label.setStyleSheet(f"color: {_FG}; background: transparent;")
+        self._ltp_label.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
         self._change_label = QLabel("")
         self._change_label.setStyleSheet(
-            f"color: {_MUTED}; font-size: 11px; background: transparent;"
+            f"color: {_MUTED}; font-size: 12px; background: transparent;"
         )
-        self._change_label.setAlignment(Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignLeft)
+        self._change_label.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
+        # Search box — auto-focused on show; Return opens SearchDialog
+        self._search_box = QLineEdit()
+        self._search_box.setPlaceholderText("⌕  Search symbol…")
+        self._search_box.setFixedHeight(24)
+        self._search_box.setFixedWidth(160)
+        self._search_box.setStyleSheet(
+            f"QLineEdit {{ background: {_BG}; color: {_MUTED}; border: 1px solid {_BORDER};"
+            f" border-radius: 4px; font-size: 11px; padding: 0 8px; }}"
+            f"QLineEdit:focus {{ border-color: #58a6ff; color: {_FG}; }}"
+        )
+        self._search_box.returnPressed.connect(self._open_search)
+
+        hl.addWidget(self._symbol_label)
+        hl.addSpacing(12)
         hl.addWidget(self._ltp_label)
-        hl.addSpacing(10)
-        hl.addWidget(self._change_label, 1)
-        layout.addWidget(header)
+        hl.addSpacing(8)
+        hl.addWidget(self._change_label)
+        hl.addStretch(1)
+        hl.addWidget(self._search_box)
+        layout.addWidget(header_row)
 
-        # ---- Depth table ----
-        self._depth_table = _DepthTable()
-        self._depth_table.setFixedHeight(
-            self._depth_table.horizontalHeader().height()
-            + _N_LEVELS * 26
-            + 2
+        # ---- Horizontal splitter: depth (left) | quote grid (right) ----
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setStyleSheet(
+            f"QSplitter::handle {{ background: {_BORDER}; width: 1px; }}"
         )
-        layout.addWidget(self._depth_table)
 
-        # ---- Ratio bar ----
+        # -- Left panel: depth table + ratio bar + total qty --
+        left = QWidget()
+        left.setStyleSheet(f"background: {_BG};")
+        left_layout = QVBoxLayout(left)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(0)
+
+        # Depth table — measure header height before adding to layout
+        self._depth_table = _DepthTable()
+        hh_h = max(self._depth_table.horizontalHeader().sizeHint().height(), 20)
+        depth_table_h = hh_h + _N_LEVELS * _ROW_H + 2
+        self._depth_table.setFixedHeight(depth_table_h)
+        left_layout.addWidget(self._depth_table)
+
         self._ratio_bar = _RatioBar()
-        layout.addWidget(self._ratio_bar)
+        left_layout.addWidget(self._ratio_bar)
 
-        # ---- Total qty row ----
         totals = QWidget()
-        totals.setFixedHeight(26)
+        totals.setFixedHeight(_TOTALS_H)
         totals.setStyleSheet(f"background: {_BG2};")
         tl = QHBoxLayout(totals)
         tl.setContentsMargins(8, 2, 8, 2)
@@ -429,40 +484,89 @@ class MarketDepthWidget(BaseWidget):
             f"color: {_RED}; font-size: 11px;"
             " font-family: 'Consolas', 'Courier New', monospace;"
         )
-        self._total_ask_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self._total_ask_label.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
 
         tl.addWidget(self._total_bid_label)
         tl.addWidget(total_center)
         tl.addWidget(self._total_ask_label)
-        layout.addWidget(totals)
+        left_layout.addWidget(totals)
+        # No addStretch — content is top-aligned, panel height matches content
 
-        layout.addWidget(_divider())
+        splitter.addWidget(left)
 
-        # ---- Quote grid (scrollable) ----
+        # -- Right panel: quote grid in scroll area --
         self._quote_grid = _QuoteGrid()
         self._quote_grid.setStyleSheet(f"background: {_BG};")
 
-        scroll = QScrollArea()
-        scroll.setWidget(self._quote_grid)
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        scroll.setStyleSheet(
+        right_scroll = QScrollArea()
+        right_scroll.setWidget(self._quote_grid)
+        right_scroll.setWidgetResizable(True)
+        right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        right_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        right_scroll.setStyleSheet(
             f"QScrollArea {{ background: {_BG}; border: none; }}"
             f"QScrollBar:vertical {{ background: {_BG2}; width: 6px; border: none; }}"
             f"QScrollBar::handle:vertical {{ background: {_BORDER}; border-radius: 3px; }}"
         )
-        layout.addWidget(scroll, 1)
+        splitter.addWidget(right_scroll)
+
+        splitter.setSizes([380, 340])
+        splitter.setCollapsible(0, False)
+        splitter.setCollapsible(1, False)
+
+        layout.addWidget(splitter, 1)
+
+        # Lock window height — single header + depth body, no vertical resize
+        fixed_h = _SEARCH_H + depth_table_h + _RATIO_H + _TOTALS_H
+        self.setFixedHeight(fixed_h)
+
+    # ------------------------------------------------------------------
+    # Feed management (replaces BaseWidget helper)
+    # ------------------------------------------------------------------
+
+    def _subscribe_feed(
+        self,
+        exchange: str,
+        token: str,
+        callback: Callable,
+        mode: int,
+    ) -> None:
+        from feed.market_feed import MarketFeed
+        MarketFeed.instance().subscribe(exchange, token, callback, mode)
+        self._feed_subs.append((exchange, token, callback))
+
+    def _unsubscribe_all_feeds(self) -> None:
+        from feed.market_feed import MarketFeed
+        feed = MarketFeed.instance()
+        for exchange, token, cb in self._feed_subs:
+            feed.unsubscribe(exchange, token, cb)
+        self._feed_subs.clear()
 
     # ------------------------------------------------------------------
     # Search / instrument load
     # ------------------------------------------------------------------
+
+    def showEvent(self, event) -> None:
+        """Auto-focus the search box each time the window is shown."""
+        super().showEvent(event)
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(0, self._search_box.setFocus)
+        QTimer.singleShot(0, self._search_box.selectAll)
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key.Key_Escape:
+            self.close()
+        else:
+            super().keyPressEvent(event)
 
     def _open_search(self) -> None:
         from widgets.watchlist.search_dialog import SearchDialog
         dlg = SearchDialog(self)
         dlg.instrument_selected.connect(self._load_instrument)
         dlg.show()
+        self._search_box.clear()
 
     def _load_instrument(self, instrument: Instrument) -> None:
         """Switch to a new instrument: unsubscribe old, subscribe new."""
@@ -470,11 +574,8 @@ class MarketDepthWidget(BaseWidget):
         self._instrument = instrument
         self._prev_ltp = 0.0
 
-        # Header labels
         exch = instrument.exchange
-        self._symbol_label.setText(
-            f"{instrument.symbol}  ·  {exch}"
-        )
+        self._symbol_label.setText(f"{instrument.symbol}  ·  {exch}")
         self._symbol_label.setStyleSheet(
             f"color: {_FG}; font-size: 12px; font-weight: bold; background: transparent;"
         )
@@ -487,8 +588,7 @@ class MarketDepthWidget(BaseWidget):
         self._total_ask_label.setText(_DASH)
         self._quote_grid.reset()
 
-        # Subscribe SNAP_QUOTE
-        self.subscribe_feed(
+        self._subscribe_feed(
             exch,
             instrument.token,
             self._on_tick_feed,
@@ -501,75 +601,34 @@ class MarketDepthWidget(BaseWidget):
         self._tick_arrived.emit(tick)
 
     # ------------------------------------------------------------------
-    # BaseWidget contract
+    # Close event
     # ------------------------------------------------------------------
 
-    def on_show(self) -> None:
-        if self._instrument:
-            self.subscribe_feed(
-                self._instrument.exchange,
-                self._instrument.token,
-                self._on_tick_feed,
-                SubscriptionMode.SNAP_QUOTE,
-            )
-
-    def on_hide(self) -> None:
-        pass  # BaseWidget._unsubscribe_all_feeds() is called automatically
-
-    def save_state(self) -> dict:
-        if not self._instrument:
-            return {}
-        return {
-            "token": self._instrument.token,
-            "exchange": self._instrument.exchange,
-            "symbol": self._instrument.symbol,
-            "name": self._instrument.name,
-            "instrument_type": self._instrument.instrument_type,
-            "expiry": self._instrument.expiry,
-            "strike": self._instrument.strike,
-            "lot_size": self._instrument.lot_size,
-            "tick_size": self._instrument.tick_size,
-        }
-
-    def restore_state(self, state: dict) -> None:
-        if not state.get("token"):
-            return
-        inst = Instrument(
-            token=state["token"],
-            exchange=state["exchange"],
-            symbol=state["symbol"],
-            name=state.get("name", ""),
-            instrument_type=state.get("instrument_type", ""),
-            expiry=state.get("expiry", ""),
-            strike=state.get("strike", -1.0),
-            lot_size=state.get("lot_size", 1),
-            tick_size=state.get("tick_size", 0.05),
-        )
-        self._load_instrument(inst)
+    def closeEvent(self, event: QCloseEvent) -> None:
+        self._unsubscribe_all_feeds()
+        self.window_closed.emit()
+        event.accept()
 
     # ------------------------------------------------------------------
-    # Tick update
+    # Tick update — unchanged from original
     # ------------------------------------------------------------------
 
     def _on_tick_ui(self, tick: Tick) -> None:
         """Main thread — update all display elements from tick."""
         ltp = tick.ltp
 
-        # LTP and change colour
         prev_close = tick.close or 0.0
         if prev_close > 0:
             change = ltp - prev_close
             change_pct = change / prev_close * 100
             colour = _GREEN if change >= 0 else _RED
             sign = "+" if change >= 0 else ""
-            self._ltp_label.setStyleSheet(
-                f"color: {colour}; background: transparent;"
-            )
+            self._ltp_label.setStyleSheet(f"color: {colour}; background: transparent;")
             self._change_label.setText(
                 f"{sign}{change:.2f}  ({sign}{change_pct:.2f}%)"
             )
             self._change_label.setStyleSheet(
-                f"color: {colour}; font-size: 11px; background: transparent;"
+                f"color: {colour}; font-size: 12px; background: transparent;"
             )
         else:
             self._ltp_label.setStyleSheet(f"color: {_FG}; background: transparent;")
@@ -577,11 +636,9 @@ class MarketDepthWidget(BaseWidget):
         self._ltp_label.setText(f"{ltp:,.2f}")
         self._prev_ltp = ltp
 
-        # Depth
         if tick.depth_buy or tick.depth_sell:
             self._depth_table.update_depth(tick.depth_buy, tick.depth_sell)
 
-        # Total quantities
         tbq = tick.total_buy_quantity
         tsq = tick.total_sell_quantity
         if tbq is not None:
@@ -591,22 +648,23 @@ class MarketDepthWidget(BaseWidget):
         if tbq is not None and tsq is not None:
             self._ratio_bar.set_ratio(tbq, tsq)
 
-        # Quote grid
-        self._quote_grid.update(tick)
+        self._quote_grid.refresh_tick(tick)
 
 
 # ---------------------------------------------------------------------------
-# Self-registration
+# Self-registration — keeps the entry in WidgetRegistry for Command Palette
+# discoverability.  MainWindow.spawn_widget() intercepts "market_depth" and
+# opens a MarketDepthWindow directly rather than going through the dock flow.
 # ---------------------------------------------------------------------------
 
 from app.widget_registry import WidgetDefinition, WidgetRegistry  # noqa: E402
 
 WidgetRegistry.register(
     WidgetDefinition(
-        widget_id=MarketDepthWidget.widget_id,
+        widget_id=MarketDepthWindow.widget_id,
         display_name="Market Depth",
         category="Market Data",
-        factory=MarketDepthWidget,
+        factory=MarketDepthWindow,  # type: ignore[arg-type]
         description="Live 5-level order book with full quote and circuit limits",
     )
 )

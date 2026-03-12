@@ -1,3 +1,3 @@
-"""Market Depth & Quote widget — self-registers with WidgetRegistry on import."""
+"""Market Depth — standalone window, self-registers with WidgetRegistry on import."""
 
-from widgets.market_depth.market_depth_widget import MarketDepthWidget  # noqa: F401
+from widgets.market_depth.market_depth_widget import MarketDepthWindow  # noqa: F401

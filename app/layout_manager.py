@@ -137,6 +137,8 @@ class _LayoutManager:
         widgets: list[BaseWidget] = []
         detached_geometries: dict[str, list[int]] = {}
 
+        from PySide6.QtWidgets import QDockWidget
+
         for entry in data.get("widgets", []):
             widget_id = entry.get("widget_id", "")
             instance_id = entry.get("instance_id", widget_id)
@@ -144,6 +146,17 @@ class _LayoutManager:
 
             try:
                 widget = WidgetRegistry.create(widget_id)
+
+                # Standalone windows (e.g. MarketDepthWindow) are plain QWidgets,
+                # not QDockWidgets.  Skip dock integration for them — they are
+                # re-opened by MainWindow via their own launch path (e.g. F5).
+                if not isinstance(widget, QDockWidget):
+                    logger.debug(
+                        "Skipping dock restore for standalone widget %r", widget_id
+                    )
+                    widget.deleteLater()
+                    continue
+
                 widget.instance_id = instance_id
                 widget.setObjectName(instance_id)
                 try:
