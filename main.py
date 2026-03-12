@@ -9,7 +9,7 @@ from PySide6.QtWidgets import QApplication
 from app.app_state import AppState
 from app.main_window import MainWindow
 from app.theme import apply_theme
-from feed.market_feed import MarketFeed
+from feed.feed_manager import FeedManager
 from utils.config import Config
 from utils.logger import configure_level, get_logger
 
@@ -49,7 +49,7 @@ def main() -> None:
 
     # Initialise non-Qt singletons before QApplication
     _ = AppState
-    _ = MarketFeed
+    _ = FeedManager
 
     app = QApplication(sys.argv)
     app.setApplicationName("DemonEdge")

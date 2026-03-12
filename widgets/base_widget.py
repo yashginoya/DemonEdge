@@ -272,16 +272,16 @@ class BaseWidget(QDockWidget):
             :class:`~feed.feed_models.SubscriptionMode` value.
             Defaults to ``LTP``.
         """
-        from feed.market_feed import MarketFeed
+        from feed.feed_manager import FeedManager
 
-        MarketFeed.instance().subscribe(exchange, token, callback, mode)
+        FeedManager.get_feed().subscribe(exchange, token, callback, mode)
         self._feed_subscriptions.append((exchange, token, callback, mode))
 
     def _unsubscribe_all_feeds(self) -> None:
         """Unsubscribe all subscriptions registered via ``subscribe_feed()``."""
-        from feed.market_feed import MarketFeed
+        from feed.feed_manager import FeedManager
 
-        feed = MarketFeed.instance()
+        feed = FeedManager.get_feed()
         for exchange, token, callback, _mode in self._feed_subscriptions:
             feed.unsubscribe(exchange, token, callback)
         self._feed_subscriptions.clear()

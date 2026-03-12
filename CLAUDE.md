@@ -160,17 +160,19 @@ Every widget must:
 - Authentication/session management is handled inside the broker implementation, not by callers.
 
 ### MarketFeed Rules
-- `MarketFeed` is a singleton: `MarketFeed.instance()`.
-- Subscribe: `MarketFeed.instance().subscribe(exchange, token, callback)`.
-- Unsubscribe: `MarketFeed.instance().unsubscribe(exchange, token, callback)`.
+- The canonical feed interface is `BaseFeed` (`feed/base_feed.py`). The active implementation is accessed via `FeedManager.get_feed()` (`feed/feed_manager.py`). **Never import or call `AngelFeed` or `MarketFeed` directly outside of `feed/`.**
+- Subscribe: `FeedManager.get_feed().subscribe(exchange, token, callback)`.
+- Unsubscribe: `FeedManager.get_feed().unsubscribe(exchange, token, callback)`.
 - `callback(tick: Tick)` is called from the feed thread — widget must re-emit via Qt signal.
-- `MarketFeed` handles reconnection internally. Widgets do not need to handle feed disconnects.
+- `FeedManager` lazy-initialises the default `AngelFeed` if no feed has been explicitly set — just calling `FeedManager.get_feed()` is always safe.
+- `MarketFeed` (module-level alias in `feed/market_feed.py`) is kept for backward compatibility only. New code must use `FeedManager.get_feed()`.
+- The feed handles reconnection internally. Widgets do not need to handle feed disconnects.
 
 ### Coding Standards
 - Python 3.11+.
 - Type hints on all function signatures.
 - Dataclasses for all data models (`@dataclass`).
-- No global mutable state outside of explicit singletons (`BrokerManager`, `MarketFeed`, `AppState`).
+- No global mutable state outside of explicit singletons (`BrokerManager`, `FeedManager`, `AppState`).
 - All singletons implemented with `__new__`-based or module-level singleton pattern, not bare globals.
 - Use `logging` (from `utils/logger.py`) — never use `print()` for anything except debug throwaway code.
 - Format with `black`. Lint with `ruff`.

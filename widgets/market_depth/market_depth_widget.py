@@ -536,13 +536,13 @@ class MarketDepthWindow(QWidget):
         callback: Callable,
         mode: int,
     ) -> None:
-        from feed.market_feed import MarketFeed
-        MarketFeed.instance().subscribe(exchange, token, callback, mode)
+        from feed.feed_manager import FeedManager
+        FeedManager.get_feed().subscribe(exchange, token, callback, mode)
         self._feed_subs.append((exchange, token, callback))
 
     def _unsubscribe_all_feeds(self) -> None:
-        from feed.market_feed import MarketFeed
-        feed = MarketFeed.instance()
+        from feed.feed_manager import FeedManager
+        feed = FeedManager.get_feed()
         for exchange, token, cb in self._feed_subs:
             feed.unsubscribe(exchange, token, cb)
         self._feed_subs.clear()

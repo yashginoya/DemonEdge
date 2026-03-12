@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 from feed.feed_models import SubscriptionMode
-from feed.market_feed import MarketFeed
+from feed.feed_manager import FeedManager
 from models.instrument import Instrument
 from models.tick import Tick
 from widgets.watchlist.watchlist_model import WatchlistModel
@@ -196,7 +196,7 @@ class WatchlistTab(QWidget):
         # Subscribe to live feed
         key = instrument.token
         if key not in self._subscribed:
-            MarketFeed.instance().subscribe(
+            FeedManager.get_feed().subscribe(
                 instrument.exchange, instrument.token,
                 self._tick_callback, SubscriptionMode.LTP
             )
@@ -218,7 +218,7 @@ class WatchlistTab(QWidget):
         instrument = self._model.remove_instrument(row_index)
         token = instrument.token
         if token in self._subscribed:
-            MarketFeed.instance().unsubscribe(
+            FeedManager.get_feed().unsubscribe(
                 instrument.exchange, token, self._tick_callback
             )
             self._subscribed.discard(token)
@@ -388,7 +388,7 @@ class WatchlistTab(QWidget):
         for inst in self._model.get_all_instruments():
             key = inst.token
             if key not in self._subscribed:
-                MarketFeed.instance().subscribe(
+                FeedManager.get_feed().subscribe(
                     inst.exchange, inst.token,
                     self._tick_callback, SubscriptionMode.LTP
                 )
@@ -397,7 +397,7 @@ class WatchlistTab(QWidget):
     def unsubscribe_all(self) -> None:
         """Unsubscribe all instruments (call when parent widget is hidden)."""
         for inst in self._model.get_all_instruments():
-            MarketFeed.instance().unsubscribe(
+            FeedManager.get_feed().unsubscribe(
                 inst.exchange, inst.token, self._tick_callback
             )
         self._subscribed.clear()

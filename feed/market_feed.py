@@ -4,6 +4,7 @@ import threading
 from datetime import datetime
 from typing import TYPE_CHECKING, Callable
 
+from feed.base_feed import BaseFeed
 from feed.feed_models import SubscriptionMode, exchange_str_to_type, exchange_type_to_str
 from models.tick import DepthLevel, Tick
 from utils.logger import get_logger
@@ -14,33 +15,39 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
-class _MarketFeed:
-    """Singleton WebSocket feed manager with pub/sub interface.
+class AngelFeed(BaseFeed):
+    """Angel SmartAPI WebSocket feed — concrete implementation of BaseFeed.
+
+    Singleton.  Access via ``FeedManager.get_feed()`` (preferred) or the
+    backward-compatible ``MarketFeed`` module-level alias.
 
     Usage
     -----
-    After broker login, call ``MarketFeed.connect(broker)`` to start the feed.
-    Widgets subscribe via ``MarketFeed.instance().subscribe(exchange, token, cb, mode)``
-    and unsubscribe via ``MarketFeed.instance().unsubscribe(exchange, token, cb)``.
+    After broker login, call ``FeedManager.get_feed().connect(broker)`` to
+    start the feed.  Widgets subscribe via
+    ``FeedManager.get_feed().subscribe(exchange, token, cb, mode)`` and
+    unsubscribe via ``FeedManager.get_feed().unsubscribe(exchange, token, cb)``.
 
-    Feed callbacks are invoked on the daemon feed thread.  Widgets must push data
-    to the Qt main thread via Qt signals — never update UI directly from a callback.
+    Feed callbacks are invoked on the daemon feed thread.  Widgets must push
+    data to the Qt main thread via Qt signals — never update UI directly from
+    a callback.
 
     Signals
     -------
-    ``MarketFeed.signals`` is a :class:`~feed.market_feed_signals.MarketFeedSignals`
-    QObject.  Connect to it from the main thread to receive lifecycle events::
+    ``FeedManager.get_feed().signals`` is a
+    :class:`~feed.market_feed_signals.MarketFeedSignals` QObject.  Connect to
+    it from the main thread to receive lifecycle events::
 
-        MarketFeed.signals.feed_connected.connect(my_slot)
-        MarketFeed.signals.feed_disconnected.connect(my_slot)
-        MarketFeed.signals.feed_error.connect(my_error_slot)
+        FeedManager.get_feed().signals.feed_connected.connect(my_slot)
+        FeedManager.get_feed().signals.feed_disconnected.connect(my_slot)
+        FeedManager.get_feed().signals.feed_error.connect(my_error_slot)
 
     ``signals`` is created lazily (after QApplication exists).
     """
 
-    _instance: "_MarketFeed | None" = None
+    _instance: "AngelFeed | None" = None
 
-    def __new__(cls) -> "_MarketFeed":
+    def __new__(cls) -> "AngelFeed":
         if cls._instance is None:
             inst = super().__new__(cls)
             # Subscriber map: "EXCHANGE:token" → [callbacks]
@@ -68,7 +75,7 @@ class _MarketFeed:
     # ------------------------------------------------------------------
 
     @classmethod
-    def instance(cls) -> "_MarketFeed":
+    def instance(cls) -> "AngelFeed":
         return cls()
 
     @property
@@ -381,4 +388,13 @@ class _MarketFeed:
                 logger.exception("Error in tick callback for %s", key)
 
 
-MarketFeed = _MarketFeed()
+# Module-level singleton — used by AngelFeed.__new__ and FeedManager auto-registration.
+_angel_feed_instance = AngelFeed()
+
+# Backward-compatible alias.  Prefer FeedManager.get_feed() for new code.
+MarketFeed = _angel_feed_instance
+
+# Auto-register with FeedManager so FeedManager.get_feed() works without
+# any explicit setup call as long as this module has been imported.
+from feed.feed_manager import FeedManager as _FeedManager  # noqa: E402
+_FeedManager.set_feed(_angel_feed_instance)

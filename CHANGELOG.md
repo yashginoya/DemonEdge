@@ -2,6 +2,31 @@
 
 ---
 
+## 2026-03-12 — refactor: Broker-abstraction cleanup (index tokens + BaseFeed/FeedManager)
+
+### Added
+- `broker/base_broker.py` — Abstract method `get_index_info(symbol: str) -> dict | None` added to `BaseBroker` interface. Returns `{"token": str, "exchange": str}` for a well-known index, or `None`.
+- `broker/angel_broker.py` — `_INDEX_INFO` class dict and `get_index_info()` implementation. Moved hardcoded Angel One index tokens here from `option_chain_widget.py`.
+- `feed/base_feed.py` — NEW: Abstract `BaseFeed` class defining the full feed interface (`connect`, `disconnect`, `subscribe`, `unsubscribe`, `is_connected`, `subscriber_count`, `signals`).
+- `feed/feed_manager.py` — NEW: `FeedManager` singleton (mirrors `BrokerManager`). `get_feed()` lazy-initialises the default `AngelFeed` if no feed has been explicitly registered.
+
+### Changed
+- `feed/market_feed.py` — Renamed `_MarketFeed` → `AngelFeed(BaseFeed)`. Module tail auto-registers the singleton with `FeedManager`. `MarketFeed` module-level alias kept for backward compatibility.
+- `widgets/option_chain/option_chain_widget.py` — Removed `INDEX_TOKENS` dict. Chain load worker now calls `BrokerManager.get_broker().get_index_info(symbol)` for index LTP and exchange. Also updated `_unsubscribe_chain_token` to use `FeedManager.get_feed()`.
+- `app/main_window.py` — All `MarketFeed.instance()` / `MarketFeed.connect()` / `MarketFeed.disconnect()` calls updated to `FeedManager.get_feed()`.
+- `widgets/base_widget.py` — `subscribe_feed` / `_unsubscribe_all_feeds` updated to use `FeedManager.get_feed()`.
+- `widgets/market_depth/market_depth_widget.py` — `_subscribe_feed` / `_unsubscribe_all_feeds` updated to use `FeedManager.get_feed()`.
+- `widgets/watchlist/watchlist_tab.py` — Top-level `MarketFeed` import replaced with `FeedManager`; all four call sites updated.
+- `widgets/feed_status/feed_status_widget.py` — All four `MarketFeed.instance()` call sites updated to `FeedManager.get_feed()`.
+- `tests/test_feed_manual.py` — Updated import and all call sites to use `FeedManager.get_feed()`.
+- `CLAUDE.md` — MarketFeed Rules section updated to document `BaseFeed`/`FeedManager` as canonical interfaces.
+
+### Architecture Decisions
+- Feed abstraction now mirrors broker abstraction exactly: `BaseFeed` defines the interface, `AngelFeed` is the implementation, `FeedManager` is the singleton accessor. Swapping feed providers requires only a new `BaseFeed` subclass and one `FeedManager.set_feed()` call.
+- `MarketFeed` alias retained to avoid breaking any external scripts; new code must use `FeedManager.get_feed()`.
+
+---
+
 ## 2026-03-12 — fix: Context menu always spawns new widgets; F5 key events now fire correctly
 
 ### Fixed

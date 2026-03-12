@@ -124,6 +124,23 @@ class AngelBroker(BaseBroker):
         return self._feed_token
 
     # ------------------------------------------------------------------
+    # Index token map — Angel One internal tokens for common indices.
+    # Moved here from option_chain_widget.py (broker-specific data).
+    # ------------------------------------------------------------------
+
+    _INDEX_INFO: dict[str, dict[str, str]] = {
+        "NIFTY":      {"token": "26000", "exchange": "NSE"},
+        "BANKNIFTY":  {"token": "26009", "exchange": "NSE"},
+        "FINNIFTY":   {"token": "26037", "exchange": "NSE"},
+        "MIDCPNIFTY": {"token": "26074", "exchange": "NSE"},
+        "SENSEX":     {"token": "1",     "exchange": "BSE"},
+    }
+
+    def get_index_info(self, symbol: str) -> dict | None:
+        """Return Angel One token + exchange for a well-known index, or None."""
+        return self._INDEX_INFO.get(symbol.upper())
+
+    # ------------------------------------------------------------------
     # Account
     # ------------------------------------------------------------------
 

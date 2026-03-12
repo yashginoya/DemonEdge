@@ -38,15 +38,6 @@ from widgets.option_chain.option_chain_row import OptionChainRow
 
 logger = get_logger(__name__)
 
-# Hardcoded index token map for common NSE/BSE indices
-INDEX_TOKENS: dict[str, dict[str, str]] = {
-    "NIFTY":      {"token": "26000", "exchange": "NSE"},
-    "BANKNIFTY":  {"token": "26009", "exchange": "NSE"},
-    "FINNIFTY":   {"token": "26037", "exchange": "NSE"},
-    "MIDCPNIFTY": {"token": "26074", "exchange": "NSE"},
-    "SENSEX":     {"token": "1",     "exchange": "BSE"},
-}
-
 # Max tokens to subscribe — warn above this; restrict to ±N strikes if exceeded
 _SUBSCRIPTION_LIMIT = 950
 _STRIKE_WINDOW       = 50  # subscribe only ±50 strikes of ATM when over limit
@@ -217,24 +208,22 @@ class _ChainLoadWorker(QRunnable):
 
             # Fetch underlying LTP
             ltp = 0.0
+            from broker.broker_manager import BrokerManager
+            broker = BrokerManager.get_broker()
+            idx_info = broker.get_index_info(self._underlying) or {}
             try:
-                from broker.broker_manager import BrokerManager
-                info = INDEX_TOKENS.get(self._underlying)
-                if info:
-                    ltp = BrokerManager.get_broker().get_ltp(info["exchange"], info["token"])
+                if idx_info:
+                    ltp = broker.get_ltp(idx_info["exchange"], idx_info["token"])
                 else:
                     # Stock — search for EQ token
                     from broker.instrument_master import InstrumentMaster
-                    eq_key = f"NSE:{self._underlying}-EQ"
-                    # Try direct token lookup or search
                     results = InstrumentMaster.search(f"{self._underlying}-EQ", exchange="NSE", max_results=5)
                     if results:
-                        ltp = BrokerManager.get_broker().get_ltp(results[0].exchange, results[0].token)
+                        ltp = broker.get_ltp(results[0].exchange, results[0].token)
             except Exception as exc:
                 logger.warning("Could not fetch underlying LTP: %s", exc)
 
             # Underlying exchange for feed subscription
-            idx_info = INDEX_TOKENS.get(self._underlying, {})
             underlying_exch = idx_info.get("exchange", "NSE")
 
             self.signals.finished.emit(rows, ltp, expiries, expiry, underlying_exch)
@@ -554,8 +543,8 @@ class OptionChainWidget(BaseWidget):
 
     def _unsubscribe_chain_token(self, token: str, callback) -> None:
         """Surgically unsubscribe one chain token and remove it from the tracking list."""
-        from feed.market_feed import MarketFeed
-        MarketFeed.instance().unsubscribe("NFO", token, callback)
+        from feed.feed_manager import FeedManager
+        FeedManager.get_feed().unsubscribe("NFO", token, callback)
         self._feed_subscriptions = [
             (e, t, cb, m) for e, t, cb, m in self._feed_subscriptions
             if not (e == "NFO" and t == token and cb == callback)

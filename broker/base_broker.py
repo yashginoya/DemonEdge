@@ -125,3 +125,18 @@ class BaseBroker(ABC):
     ) -> list[dict]:
         """Fetch OHLCV historical data. Returns a list of dicts with OHLCV keys."""
         ...
+
+    @abstractmethod
+    def get_index_info(self, symbol: str) -> dict | None:
+        """Return the broker token and exchange for a well-known index symbol.
+
+        Returns a dict with keys ``"token"`` (str) and ``"exchange"`` (str),
+        or ``None`` if the symbol is not a recognised index for this broker.
+
+        Example::
+
+            broker.get_index_info("NIFTY")   # → {"token": "26000", "exchange": "NSE"}
+            broker.get_index_info("SENSEX")  # → {"token": "1",     "exchange": "BSE"}
+            broker.get_index_info("RELIANCE") # → None  (not an index)
+        """
+        ...

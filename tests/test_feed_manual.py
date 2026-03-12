@@ -37,7 +37,7 @@ _qt_app = QCoreApplication(sys.argv)
 # --- project imports (after sys.path and QCoreApplication are set up) ---
 from broker.angel_broker import AngelBroker
 from feed.feed_models import SubscriptionMode
-from feed.market_feed import MarketFeed
+from feed.feed_manager import FeedManager
 from utils.config import Config
 
 
@@ -93,15 +93,15 @@ def main() -> None:
     # 3. Subscribe BEFORE connect — exercises the pending-queue path.
     #    Pending items are flushed to the WebSocket in _on_open().
     # ------------------------------------------------------------------
-    MarketFeed.instance().subscribe("NSE", "2885", on_tick, SubscriptionMode.LTP)
-    MarketFeed.instance().subscribe("NSE", "3045", on_tick, SubscriptionMode.LTP)
+    FeedManager.get_feed().subscribe("NSE", "2885", on_tick, SubscriptionMode.LTP)
+    FeedManager.get_feed().subscribe("NSE", "3045", on_tick, SubscriptionMode.LTP)
     print("[INFO] Subscribed (pending): NSE:2885 (RELIANCE), NSE:3045 (SBIN)")
 
     # ------------------------------------------------------------------
     # 4. Start the WebSocket feed (non-blocking — runs on daemon thread)
     # ------------------------------------------------------------------
-    MarketFeed.connect(broker)
-    print("[INFO] MarketFeed.connect() called — waiting for WebSocket handshake …")
+    FeedManager.get_feed().connect(broker)
+    print("[INFO] FeedManager.get_feed().connect() called — waiting for WebSocket handshake …")
     print("[INFO] Listening for 30 seconds. Run during market hours for live ticks.")
     print("-" * 60)
 
@@ -118,7 +118,7 @@ def main() -> None:
     # ------------------------------------------------------------------
     print("-" * 60)
     print("[INFO] Disconnecting …")
-    MarketFeed.disconnect()
+    FeedManager.get_feed().disconnect()
     print("[INFO] Done.")
 
 

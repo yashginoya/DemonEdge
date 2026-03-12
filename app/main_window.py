@@ -330,7 +330,7 @@ class MainWindow(QMainWindow):
     def on_login_success(self, client_id: str, broker_name: str) -> None:
         """Called via signal after successful broker connection."""
         from broker.broker_manager import BrokerManager
-        from feed.market_feed import MarketFeed
+        from feed.feed_manager import FeedManager
 
         AppState.set_connected(True)
 
@@ -342,7 +342,7 @@ class MainWindow(QMainWindow):
         logger.info("Terminal connected: broker=%s client=%s", broker_name, client_id)
 
         # Wire feed signals to status bar indicators (connect once)
-        feed_signals = MarketFeed.instance().signals
+        feed_signals = FeedManager.get_feed().signals
         feed_signals.feed_connected.connect(self._on_feed_connected)
         feed_signals.feed_disconnected.connect(self._on_feed_disconnected)
         feed_signals.feed_error.connect(self._on_feed_error)
@@ -350,7 +350,7 @@ class MainWindow(QMainWindow):
         # Start the WebSocket feed
         try:
             broker = BrokerManager.get_broker()
-            MarketFeed.connect(broker)
+            FeedManager.get_feed().connect(broker)
         except Exception as exc:
             logger.error("Failed to start MarketFeed: %s", exc)
 
@@ -364,11 +364,11 @@ class MainWindow(QMainWindow):
 
     def _on_disconnect(self) -> None:
         from broker.broker_manager import BrokerManager
-        from feed.market_feed import MarketFeed
+        from feed.feed_manager import FeedManager
 
         # Stop the feed before broker disconnect
         try:
-            MarketFeed.disconnect()
+            FeedManager.get_feed().disconnect()
         except Exception as exc:
             logger.warning("Error stopping MarketFeed: %s", exc)
 
@@ -949,9 +949,9 @@ class MainWindow(QMainWindow):
         self._log_viewer_window.hide()
         self._shortcuts_window.hide()
 
-        from feed.market_feed import MarketFeed
+        from feed.feed_manager import FeedManager
         try:
-            MarketFeed.disconnect()
+            FeedManager.get_feed().disconnect()
         except Exception:
             pass
 

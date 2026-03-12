@@ -109,9 +109,9 @@ class FeedStatusWidget(BaseWidget):
 
     def _connect_feed_signals(self) -> None:
         """Wire up MarketFeed signals → private Qt signals → UI update slots."""
-        from feed.market_feed import MarketFeed
+        from feed.feed_manager import FeedManager
 
-        feed_signals = MarketFeed.instance().signals
+        feed_signals = FeedManager.get_feed().signals
         feed_signals.feed_connected.connect(self._connected_signal)
         feed_signals.feed_disconnected.connect(self._disconnected_signal)
         feed_signals.feed_error.connect(self._error_signal)
@@ -127,7 +127,7 @@ class FeedStatusWidget(BaseWidget):
         # restore). Without this check the widget shows "Disconnected" even
         # while ticks are flowing because it missed the one-time feed_connected
         # emission that happened before it subscribed.
-        if MarketFeed.instance().is_connected:
+        if FeedManager.get_feed().is_connected:
             self._on_connected()
 
     # ------------------------------------------------------------------
@@ -162,16 +162,16 @@ class FeedStatusWidget(BaseWidget):
         self._update_subs()  # once per second is enough
 
     def _update_subs(self) -> None:
-        from feed.market_feed import MarketFeed
-        self._subs_label.setText(str(MarketFeed.instance().subscriber_count()))
+        from feed.feed_manager import FeedManager
+        self._subs_label.setText(str(FeedManager.get_feed().subscriber_count()))
 
     # ------------------------------------------------------------------
     # BaseWidget contract
     # ------------------------------------------------------------------
 
     def on_show(self) -> None:
-        from feed.market_feed import MarketFeed
-        if MarketFeed.instance().is_connected:
+        from feed.feed_manager import FeedManager
+        if FeedManager.get_feed().is_connected:
             self._on_connected()
         else:
             self._on_disconnected()
