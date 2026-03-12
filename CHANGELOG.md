@@ -2,6 +2,26 @@
 
 ---
 
+## 2026-03-12 — fix: Context menu always spawns new widgets; F5 key events now fire correctly
+
+### Fixed
+- `app/main_window.py` — **Fix 1 (new widgets):** `send_instrument_to_order_entry_with_side` now calls `spawn_widget("order_entry")` to always create a fresh floating Order Entry window rather than reusing an existing one. `open_option_chain_for_symbol` now calls `spawn_widget("option_chain")` unconditionally. **Fix 2 (F5 key):** Removed F5 from the `QShortcut` bindings list. Added `keyPressEvent` override to `MainWindow` that handles F5 as the global fallback — this method is only reached when no child widget consumes the event first.
+- `widgets/watchlist/watchlist_tab.py` — Removed `QShortcut`/`QKeySequence` F5 shortcut (it fired in parallel with the global shortcut, opening two windows). Added `Qt.FocusPolicy.StrongFocus` to the table so key events are reliably delivered when a row is clicked. Added F5 branch to the existing `_table_key_press` monkey-patch: if a row is selected, open Market Depth for that symbol and consume the event; if no row is selected, forward to `QTableView.keyPressEvent` so the event propagates up to `MainWindow.keyPressEvent` and opens a blank Market Depth window.
+- `widgets/option_chain/option_chain_widget.py` — Removed `QShortcut`/`QKeySequence` F5 shortcut. Added `Qt.FocusPolicy.StrongFocus` to the table. Added `_oc_table_key_press` monkey-patch on the chain table: F5 with a valid selected row calls `_open_md_for_selected` and returns (consuming the event); all other keys forward to `QTableView.keyPressEvent`.
+
+---
+
+## 2026-03-12 — feat: Symbol-aware context actions on Watchlist and Option Chain
+
+### Added
+- `widgets/watchlist/watchlist_tab.py` — **F5 shortcut** (`QShortcut` with `WidgetShortcut` context on the table) opens a Market Depth window pre-loaded with the selected symbol. Fires only when the table has focus, suppressing the global F5 shortcut so no blank window is opened alongside. **Context menu** extended with four new items (after existing Chart action): "Market Depth  F5", separator, "Buy", "Sell", separator, "Option Chain". Buy/Sell pre-select the transaction side in Order Entry. Option Chain opens (or reuses) the Option Chain widget with the symbol's underlying loaded.
+- `widgets/option_chain/option_chain_widget.py` — **F5 shortcut** on the chain table opens Market Depth for the selected strike. CE/PE side is determined from the currently selected column (`visible_columns()[col].side`). Token is resolved to a full `Instrument` via `InstrumentMaster.get_by_token("NFO", token)`; falls back to a minimal Instrument if not found. New public method `load_underlying(symbol)` sets the underlying input and triggers a chain load.
+- `app/main_window.py` — Three new public methods: `open_market_depth_for_instrument(instrument)` (delegates to `_open_market_depth`), `send_instrument_to_order_entry_with_side(instrument, side)` (sets instrument then calls `set_side`), `open_option_chain_for_symbol(symbol)` (gets-or-creates Option Chain widget and calls `load_underlying`). `_open_market_depth` now accepts an optional `instrument` param passed through to `MarketDepthWindow`.
+- `widgets/market_depth/market_depth_widget.py` — `MarketDepthWindow.__init__` accepts an optional `instrument: Instrument | None = None`; if provided, calls `_load_instrument` immediately after UI is built.
+- `widgets/order_entry/order_entry_widget.py` — New public method `set_side(side)` delegates to `self._form._set_side(side)` so callers can pre-select BUY or SELL.
+
+---
+
 ## 2026-03-12 — fix: Market Depth Volume and OI display raw Indian-formatted integers
 
 ### Fixed

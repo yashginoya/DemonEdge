@@ -532,11 +532,11 @@ class MainWindow(QMainWindow):
             self._active_widgets.pop(instance_id)
             logger.debug("Widget deregistered: %s", instance_id)
 
-    def _open_market_depth(self) -> None:
+    def _open_market_depth(self, instrument=None) -> None:
         """Open a new standalone Market Depth window (multiple instances allowed)."""
         from widgets.market_depth.market_depth_widget import MarketDepthWindow
 
-        win = MarketDepthWindow()
+        win = MarketDepthWindow(instrument)
 
         def _on_closed(w: MarketDepthWindow = win) -> None:
             try:
@@ -566,11 +566,28 @@ class MainWindow(QMainWindow):
                 return w
         return None
 
+    def open_market_depth_for_instrument(self, instrument) -> None:
+        """Open a Market Depth window pre-loaded with the given instrument."""
+        self._open_market_depth(instrument)
+
     def send_instrument_to_order_entry(self, instrument) -> None:
         """Forward an instrument from a watchlist double-click to OrderEntryWidget."""
         w = self.get_first_widget_of_type("order_entry")
         if w is not None:
             w.set_instrument(instrument)  # type: ignore[attr-defined]
+
+    def send_instrument_to_order_entry_with_side(self, instrument, side: str) -> None:
+        """Open a NEW Order Entry widget pre-filled with instrument and side."""
+        oe = self.spawn_widget("order_entry")
+        if oe is not None:
+            oe.set_instrument(instrument)  # type: ignore[attr-defined]
+            oe.set_side(side)              # type: ignore[attr-defined]
+
+    def open_option_chain_for_symbol(self, symbol: str) -> None:
+        """Open a NEW Option Chain widget and load the given underlying symbol."""
+        oc = self.spawn_widget("option_chain")
+        if oc is not None:
+            oc.load_underlying(symbol)  # type: ignore[attr-defined]
 
     def _on_order_placed(self) -> None:
         """Refresh PositionsWidget immediately after an order is placed."""
@@ -825,7 +842,7 @@ class MainWindow(QMainWindow):
             ("Ctrl+O", lambda: self.spawn_widget("option_chain")),
             ("Ctrl+P", lambda: self.spawn_widget("positions")),
             ("Ctrl+L", self._toggle_log_viewer),
-            ("F5", lambda: self.spawn_widget("market_depth")),
+            # F5 is handled in keyPressEvent so widget-level handlers can intercept it
             # General
             ("Ctrl+K", self._toggle_command_palette),
             ("Ctrl+Shift+S", self._save_layout),
@@ -834,6 +851,15 @@ class MainWindow(QMainWindow):
         for key, slot in bindings:
             sc = QShortcut(QKeySequence(key), self)
             sc.activated.connect(slot)
+
+    def keyPressEvent(self, event) -> None:
+        """Global fallback key handler.  F5 opens a blank Market Depth window
+        only when no child widget has already consumed the event (e.g. watchlist
+        or option chain table with a selected row intercepts F5 first)."""
+        if event.key() == Qt.Key.Key_F5:
+            self.spawn_widget("market_depth")
+        else:
+            super().keyPressEvent(event)
 
     def _show_shortcuts_window(self) -> None:
         self._shortcuts_window.show_or_raise()

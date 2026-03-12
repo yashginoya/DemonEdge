@@ -114,6 +114,10 @@ class OrderEntryWidget(BaseWidget):
             self._form.ltp_feed_callback, SubscriptionMode.LTP
         )
 
+    def set_side(self, side: str) -> None:
+        """Pre-select BUY or SELL on the order form."""
+        self._form._set_side(side)
+
     # ------------------------------------------------------------------
     # BaseWidget contract
     # ------------------------------------------------------------------

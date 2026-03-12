@@ -365,7 +365,7 @@ class MarketDepthWindow(QWidget):
     # Emitted just before the window is destroyed so MainWindow can clean up
     window_closed = Signal()
 
-    def __init__(self) -> None:
+    def __init__(self, instrument: "Instrument | None" = None) -> None:
         super().__init__(None, Qt.WindowType.Window | Qt.WindowType.WindowStaysOnTopHint)
         self.setWindowTitle("DemonEdge - Market Depth")
 
@@ -376,6 +376,9 @@ class MarketDepthWindow(QWidget):
 
         self._build_ui()
         self._tick_arrived.connect(self._on_tick_ui)
+
+        if instrument is not None:
+            self._load_instrument(instrument)
 
     # ------------------------------------------------------------------
     # UI construction

@@ -145,7 +145,10 @@ class WatchlistTab(QWidget):
         # Double-click → emit instrument_selected
         self._table.doubleClicked.connect(self._on_row_double_clicked)
 
-        # Delete key removes selected row
+        # Table must receive keyboard focus so key events reach the monkey-patch
+        self._table.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+        # Delete / F5 key handling (overrides table default keyPressEvent)
         self._table.keyPressEvent = self._table_key_press
 
         # Status message (brief feedback)
@@ -285,6 +288,28 @@ class WatchlistTab(QWidget):
         chart_action.triggered.connect(lambda: self._add_to_chart(inst))
         menu.addAction(chart_action)
 
+        menu.addSeparator()
+
+        md_action = QAction("Market Depth  \tF5", self)
+        md_action.triggered.connect(lambda: self._open_market_depth_for(inst))
+        menu.addAction(md_action)
+
+        menu.addSeparator()
+
+        buy_action = QAction("Buy", self)
+        buy_action.triggered.connect(lambda: self._order_entry_with_side(inst, "BUY"))
+        menu.addAction(buy_action)
+
+        sell_action = QAction("Sell", self)
+        sell_action.triggered.connect(lambda: self._order_entry_with_side(inst, "SELL"))
+        menu.addAction(sell_action)
+
+        menu.addSeparator()
+
+        oc_action = QAction("Option Chain", self)
+        oc_action.triggered.connect(lambda: self._open_option_chain_for(inst))
+        menu.addAction(oc_action)
+
         menu.exec(self._table.viewport().mapToGlobal(pos))
 
     # ------------------------------------------------------------------
@@ -306,6 +331,35 @@ class WatchlistTab(QWidget):
         else:
             logger.debug("No chart widget open to receive instrument")
 
+    def _open_market_depth_for_selected(self) -> None:
+        """F5 handler — open Market Depth for the currently selected row."""
+        indexes = self._table.selectedIndexes()
+        if not indexes:
+            return
+        row = self._model.get_row(indexes[0].row())
+        self._open_market_depth_for(row.instrument)
+
+    def _open_market_depth_for(self, instrument: Instrument) -> None:
+        from PySide6.QtWidgets import QApplication
+        mw = QApplication.activeWindow()
+        fn = getattr(mw, "open_market_depth_for_instrument", None)
+        if fn:
+            fn(instrument)
+
+    def _order_entry_with_side(self, instrument: Instrument, side: str) -> None:
+        from PySide6.QtWidgets import QApplication
+        mw = QApplication.activeWindow()
+        fn = getattr(mw, "send_instrument_to_order_entry_with_side", None)
+        if fn:
+            fn(instrument, side)
+
+    def _open_option_chain_for(self, instrument: Instrument) -> None:
+        from PySide6.QtWidgets import QApplication
+        mw = QApplication.activeWindow()
+        fn = getattr(mw, "open_option_chain_for_symbol", None)
+        if fn:
+            fn(instrument.symbol)
+
     def _on_row_double_clicked(self, index: QModelIndex) -> None:
         """Emit instrument_selected when the user double-clicks a row."""
         row = self._model.get_row(index.row())
@@ -314,6 +368,14 @@ class WatchlistTab(QWidget):
     def _table_key_press(self, event) -> None:
         if event.key() == Qt.Key.Key_Delete:
             self._remove_selected()
+        elif event.key() == Qt.Key.Key_F5:
+            indexes = self._table.selectedIndexes()
+            if indexes:
+                row = self._model.get_row(indexes[0].row())
+                self._open_market_depth_for(row.instrument)
+                # Consume the event — prevents propagation to MainWindow's F5 handler
+            else:
+                QTableView.keyPressEvent(self._table, event)
         else:
             QTableView.keyPressEvent(self._table, event)
 

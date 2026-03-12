@@ -395,6 +395,13 @@ class OptionChainWidget(BaseWidget):
         self._table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self._table.setShowGrid(True)
         self._table.verticalHeader().setDefaultSectionSize(22)
+
+        # Table must receive keyboard focus so F5 key events are delivered here
+        self._table.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+        # F5 → open Market Depth for selected strike; fall through otherwise
+        self._table.keyPressEvent = self._oc_table_key_press
+
         root.addWidget(self._table)
 
         self.setWidget(content)
@@ -439,6 +446,81 @@ class OptionChainWidget(BaseWidget):
             # If a chain is already loaded, re-filter immediately
             if self._rows:
                 self._refilter_visible_rows()
+
+    # ------------------------------------------------------------------
+    # Public API (called by MainWindow / other widgets)
+    # ------------------------------------------------------------------
+
+    def load_underlying(self, symbol: str) -> None:
+        """Pre-load the given underlying symbol (e.g. 'NIFTY') into the chain."""
+        name = symbol.upper().strip()
+        if not name:
+            return
+        self._underlying_input.setText(name)
+        self._load_chain(name, "")
+
+    # ------------------------------------------------------------------
+    # F5 — open Market Depth for selected strike
+    # ------------------------------------------------------------------
+
+    def _oc_table_key_press(self, event) -> None:
+        """Monkey-patched keyPressEvent for the option chain table.
+
+        F5 with a selected row opens Market Depth for that strike and consumes
+        the event so it does not propagate to MainWindow's F5 handler.
+        All other keys are forwarded to the default QTableView handler.
+        """
+        if event.key() == Qt.Key.Key_F5:
+            idx = self._table.currentIndex()
+            if idx.isValid() and self._visible_rows:
+                self._open_md_for_selected()
+                # Consume — prevents MainWindow keyPressEvent from also firing
+                return
+        QTableView.keyPressEvent(self._table, event)
+
+    def _open_md_for_selected(self) -> None:
+        """F5 handler — open a Market Depth window for the selected CE or PE token."""
+        idx = self._table.currentIndex()
+        if not idx.isValid() or not self._visible_rows:
+            return
+        row_idx = idx.row()
+        if row_idx < 0 or row_idx >= len(self._visible_rows):
+            return
+        row = self._visible_rows[row_idx]
+
+        # Determine CE vs PE from which column is selected
+        col_idx = idx.column()
+        visible_cols = self._model.visible_columns()
+        side = "CE"
+        if 0 <= col_idx < len(visible_cols):
+            side = visible_cols[col_idx].side  # "CE", "CENTER", or "PE"
+
+        token = row.pe_token if side == "PE" else row.ce_token
+        # Fallback: if chosen side has no token, try the other
+        if not token:
+            token = row.ce_token or row.pe_token
+        if not token:
+            return
+
+        # Look up full Instrument from InstrumentMaster
+        from broker.instrument_master import InstrumentMaster
+        from models.instrument import Instrument
+        instrument = InstrumentMaster.get_by_token("NFO", token)
+        if instrument is None:
+            # Construct a minimal Instrument so Market Depth can still subscribe
+            instrument = Instrument(
+                symbol=token,
+                token=token,
+                exchange="NFO",
+                name=token,
+                instrument_type="OPTIDX",
+            )
+
+        from PySide6.QtWidgets import QApplication
+        mw = QApplication.activeWindow()
+        fn = getattr(mw, "open_market_depth_for_instrument", None)
+        if fn:
+            fn(instrument)
 
     # ------------------------------------------------------------------
     # Strike filtering helpers
