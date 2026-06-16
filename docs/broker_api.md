@@ -126,3 +126,47 @@ Pass Angel interval strings: `"ONE_MINUTE"`, `"THREE_MINUTE"`, `"FIVE_MINUTE"`, 
 - Authentication/session renewal is handled inside the broker implementation.
 - All errors from broker implementations are raised as `BrokerAPIError`.
 - Never import `AngelBroker` outside of `broker/` — always use `BrokerManager.get_broker()`.
+
+## Broker Implementations
+
+| Key | Class | Auth |
+|---|---|---|
+| `angel` | `broker/angel_broker.py` `AngelBroker` | TOTP (api_key + client_id + password + totp_secret) |
+| `kite` | `broker/kite_broker.py` `KiteBroker` | OAuth redirect (api_key + api_secret → request_token → access_token) |
+
+`BrokerManager.create_broker(broker_key, credentials)` instantiates and registers
+the named broker. Both can be configured simultaneously; the login dialog selects
+which is active.
+
+### `KiteBroker` notes
+- Wraps the official `kiteconnect.KiteConnect`. `connect()` exchanges a
+  `request_token` (set via `set_request_token()`) for a daily `access_token`, or
+  validates a cached token. The interactive browser/redirect-capture lives in
+  `broker/kite_auth.py`; `KiteBroker` never opens a browser itself.
+- Exposes `api_key` / `access_token` / `access_token_date` (for the feed and
+  same-day token caching) and `login_url()`.
+- Translates the app's Angel-style order/margin param dicts into Kite's call
+  signature (variety as an argument, MIS/CNC/NRML product chosen by segment,
+  SL/SL-M order types, `minute`/`day` intervals). Bracket/ROBO orders are
+  unsupported on Kite and downgraded to a regular order.
+
+## `fetch_instruments()` — canonical instrument schema
+
+`BaseBroker.fetch_instruments() -> list[dict]` downloads the broker's full
+instrument dump and maps it into a **broker-neutral canonical schema** that
+`InstrumentMaster` caches and indexes. Each record:
+
+| key | type | notes |
+|---|---|---|
+| `symbol` | str | trading symbol |
+| `token` | str | broker instrument token |
+| `exchange` | str | `NSE`/`NFO`/`BSE`/`BFO`/`MCX`/… |
+| `name` | str | underlying / company name |
+| `instrument_type` | str | canonical `EQ`/`FUT`/`CE`/`PE` (or raw) |
+| `expiry` | str | ISO `YYYY-MM-DD`; `""` for non-derivatives |
+| `strike` | float | **rupees**; `-1.0` for non-options |
+| `lot_size` | int | contract lot size |
+| `tick_size` | float | minimum price move in **rupees** |
+
+Each broker absorbs its own quirks here (Angel: paise→rupees, `28NOV2024`→ISO,
+OPTIDX/OPTSTK→CE/PE; Kite is already close to canonical).

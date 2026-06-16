@@ -1,7 +1,8 @@
 """InstrumentMaster — local instrument cache for fast symbol search.
 
-Downloads the broker's full instrument list once per day and stores it as
-``data/instrument_master/{broker_key}_{YYYY-MM-DD}.json``.  Subsequent
+Fetches the broker's full instrument list once per day (via
+``broker.fetch_instruments()``, canonical schema) and stores it as
+``data/instrument_master/{broker_key}_v2_{YYYY-MM-DD}.json``.  Subsequent
 calls within the same calendar day reuse the cached file — no network
 request needed.
 
@@ -23,7 +24,6 @@ from __future__ import annotations
 import glob
 import json
 import os
-import urllib.request
 from datetime import date
 from typing import TYPE_CHECKING
 
@@ -65,6 +65,7 @@ class _InstrumentMaster:
             cls._instance._loaded = False
             cls._instance._index: list[tuple[str, str, dict]] = []
             cls._instance._token_map: dict[str, dict] = {}
+            cls._instance._symbol_map: dict[str, dict] = {}
         return cls._instance
 
     # ------------------------------------------------------------------
@@ -78,7 +79,11 @@ class _InstrumentMaster:
         return len(self._index)
 
     def ensure_loaded(self, broker: "BaseBroker") -> int:
-        """Download today's instrument master if needed, build search index.
+        """Fetch today's instrument master if needed, build search index.
+
+        The dump is fetched via ``broker.fetch_instruments()`` (canonical
+        schema) and cached as ``{broker_key}_v2_{YYYY-MM-DD}.json``.  Subsequent
+        calls within the same day reuse the cache — no network request.
 
         Returns the total record count.
         Raises ``RuntimeError`` if no data could be loaded.
@@ -88,22 +93,26 @@ class _InstrumentMaster:
 
         os.makedirs(_DATA_DIR, exist_ok=True)
 
+        # ``v2`` marks the canonical (broker-neutral) cache schema, distinct
+        # from the older Angel-raw cache files.
         today_str = date.today().isoformat()
-        today_file = os.path.join(_DATA_DIR, f"{broker.broker_key}_{today_str}.json")
+        today_file = os.path.join(_DATA_DIR, f"{broker.broker_key}_v2_{today_str}.json")
 
         if os.path.exists(today_file):
             logger.info("Using cached instrument master: %s", today_file)
             self._load_from_file(today_file)
             return len(self._index)
 
-        # Try to download fresh copy
+        # Try to fetch a fresh copy via the broker (canonical records)
         try:
-            self._download(broker.instrument_master_url, today_file)
-            self._load_from_file(today_file)
+            records = broker.fetch_instruments()
+            self._write_cache(records, today_file)
+            self._build_index(records)
+            logger.info("Instrument master loaded: %d records", len(self._index))
             return len(self._index)
         except Exception as exc:
-            logger.warning("Failed to download instrument master: %s", exc)
-            # Remove partial download if any
+            logger.warning("Failed to fetch instrument master: %s", exc)
+            # Remove partial cache if any
             if os.path.exists(today_file):
                 try:
                     os.remove(today_file)
@@ -111,7 +120,7 @@ class _InstrumentMaster:
                     pass
 
         # Fallback: use most recent cached file for this broker
-        pattern = os.path.join(_DATA_DIR, f"{broker.broker_key}_*.json")
+        pattern = os.path.join(_DATA_DIR, f"{broker.broker_key}_v2_*.json")
         existing = sorted(glob.glob(pattern), reverse=True)
         if existing:
             logger.info("Falling back to cached instrument master: %s", existing[0])
@@ -119,7 +128,7 @@ class _InstrumentMaster:
             return len(self._index)
 
         raise RuntimeError(
-            "Could not load instrument master: download failed and no cache available."
+            "Could not load instrument master: fetch failed and no cache available."
         )
 
     def search(
@@ -146,7 +155,7 @@ class _InstrumentMaster:
 
         scored: list[tuple[int, str, dict]] = []
         for sym_lower, name_lower, record in self._index:
-            if exchange and record.get("exch_seg", "") != exchange:
+            if exchange and record.get("exchange", "") != exchange:
                 continue
 
             if sym_lower.startswith(q):
@@ -170,28 +179,22 @@ class _InstrumentMaster:
             return None
         return self._to_instrument(record)
 
+    def get_by_symbol(self, exchange: str, symbol: str) -> Instrument | None:
+        """Look up a single instrument by exchange + exact trading symbol. O(1)."""
+        record = self._symbol_map.get(f"{exchange}:{symbol.upper()}")
+        if record is None:
+            return None
+        return self._to_instrument(record)
+
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
 
-    def _download(self, url: str, dest_path: str) -> None:
-        logger.info("Downloading instrument master from %s", url)
-        req = urllib.request.Request(
-            url,
-            headers={
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/120 Safari/537.36"
-                )
-            },
-        )
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            data = resp.read()
-        with open(dest_path, "wb") as f:
-            f.write(data)
+    def _write_cache(self, records: list[dict], dest_path: str) -> None:
+        with open(dest_path, "w", encoding="utf-8") as f:
+            json.dump(records, f)
         logger.info(
-            "Instrument master downloaded: %d bytes → %s", len(data), dest_path
+            "Instrument master cached: %d records → %s", len(records), dest_path
         )
 
     def _load_from_file(self, path: str) -> None:
@@ -204,37 +207,41 @@ class _InstrumentMaster:
     def _build_index(self, records: list[dict]) -> None:
         index: list[tuple[str, str, dict]] = []
         token_map: dict[str, dict] = {}
+        symbol_map: dict[str, dict] = {}
 
         for rec in records:
             sym = rec.get("symbol", "")
             name = rec.get("name", "")
-            exch = rec.get("exch_seg", "")
+            exch = rec.get("exchange", "")
             token = rec.get("token", "")
 
             index.append((sym.lower(), name.lower(), rec))
 
             if token and exch:
                 token_map[f"{exch}:{token}"] = rec
+            if sym and exch:
+                symbol_map[f"{exch}:{sym.upper()}"] = rec
 
         self._index = index
         self._token_map = token_map
+        self._symbol_map = symbol_map
         self._loaded = True
 
     def _to_instrument(self, record: dict) -> Instrument:
-        # Angel tick_size is stored in paise (e.g. "5" = ₹0.05)
-        tick_size = _safe_float(record.get("tick_size", "5")) / 100.0
+        # Canonical records already store tick_size / strike in rupees.
+        tick_size = _safe_float(record.get("tick_size", 0.05))
         if tick_size <= 0.0:
             tick_size = 0.05
 
         return Instrument(
             symbol=record.get("symbol", ""),
             token=record.get("token", ""),
-            exchange=record.get("exch_seg", ""),
+            exchange=record.get("exchange", ""),
             name=record.get("name", ""),
-            instrument_type=record.get("instrumenttype", ""),
+            instrument_type=record.get("instrument_type", ""),
             expiry=record.get("expiry", ""),
-            strike=_safe_float(record.get("strike", "-1")),
-            lot_size=_safe_int(record.get("lotsize", "1")) or 1,
+            strike=_safe_float(record.get("strike", -1.0)),
+            lot_size=_safe_int(record.get("lot_size", 1)) or 1,
             tick_size=tick_size,
         )
 

@@ -1,4 +1,5 @@
 import os
+from datetime import date
 
 import yaml
 from PySide6.QtCore import Qt, QThread, Signal
@@ -11,7 +12,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
-    QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -26,6 +26,8 @@ logger = get_logger(__name__)
 _SETTINGS_PATH = os.path.join(
     os.path.dirname(os.path.dirname(__file__)), "config", "settings.yaml"
 )
+
+_DEFAULT_KITE_PORT = 5010
 
 _QSS = """
 QDialog {
@@ -48,6 +50,10 @@ QLabel#welcome {
     color: #e6edf3;
     font-size: 15px;
     font-weight: bold;
+}
+QLabel#hint {
+    color: #8b949e;
+    font-size: 11px;
 }
 QLabel#error {
     color: #f85149;
@@ -153,21 +159,45 @@ QFrame#divider {
 
 _BROKER_MAP = {
     "Angel SmartAPI": "angel",
+    "Zerodha Kite": "kite",
 }
 
 
 class _ConnectWorker(QThread):
-    """Runs broker.connect() on a background thread."""
+    """Runs the broker login on a background thread.
+
+    For Kite, optionally performs the interactive browser/redirect-capture flow
+    first (``kite_auth=True``) to obtain a fresh request_token before connecting.
+    """
 
     success = Signal()
     failure = Signal(str)
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        kite_auth: bool = False,
+        login_url: str = "",
+        port: int = _DEFAULT_KITE_PORT,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
+        self._kite_auth = kite_auth
+        self._login_url = login_url
+        self._port = port
 
     def run(self) -> None:
         try:
             broker = BrokerManager.get_broker()
+
+            if self._kite_auth:
+                from broker.kite_auth import KiteAuthError, capture_request_token
+                try:
+                    request_token = capture_request_token(self._login_url, port=self._port)
+                except KiteAuthError as exc:
+                    self.failure.emit(str(exc))
+                    return
+                broker.set_request_token(request_token)
+
             ok = broker.connect()
             if ok:
                 self.success.emit()
@@ -181,16 +211,16 @@ class _ConnectWorker(QThread):
 
 
 class LoginWindow(QDialog):
-    """Login / configuration dialog.
+    """Login / configuration dialog (broker-aware: Angel + Zerodha Kite).
 
-    Mode B (returning launch): shown when settings.yaml exists with credentials.
+    Mode B (returning launch): shown when settings.yaml has saved credentials.
     Mode A (form): shown on first launch or when "Edit credentials" is clicked.
 
     Signals:
         login_successful(client_id, broker_name): emitted on successful connection.
     """
 
-    login_successful = Signal(str, str)  # (client_id, broker_name)
+    login_successful = Signal(str, str)  # (client_id, broker_display)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -204,10 +234,10 @@ class LoginWindow(QDialog):
         self._is_first_launch = self._saved_creds is None
         self._came_from_mode_b = False
         self._worker: _ConnectWorker | None = None
+        self._last_kite_cached = False  # track for expiry-fallback
 
         self._build_ui()
 
-        # Start in the appropriate mode
         if self._is_first_launch:
             self._show_mode_a(prefill=None)
         else:
@@ -222,7 +252,6 @@ class LoginWindow(QDialog):
         outer.setContentsMargins(24, 24, 24, 24)
         outer.setSpacing(0)
 
-        # Title row
         title = QLabel("DemonEdge")
         title.setObjectName("title")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -234,7 +263,6 @@ class LoginWindow(QDialog):
         outer.addWidget(sub)
         outer.addSpacing(20)
 
-        # Card frame
         card = QFrame()
         card.setObjectName("card")
         card_layout = QVBoxLayout(card)
@@ -242,7 +270,14 @@ class LoginWindow(QDialog):
         card_layout.setSpacing(12)
         outer.addWidget(card)
 
-        # Stacked pages: 0 = Mode B, 1 = Mode A
+        # Create the error label up front — _build_mode_a_page() triggers
+        # _on_broker_changed() → _clear_error(), which needs it to exist.
+        self._error_label = QLabel("")
+        self._error_label.setObjectName("error")
+        self._error_label.setWordWrap(True)
+        self._error_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._error_label.setVisible(False)
+
         self._stack = QStackedWidget()
         card_layout.addWidget(self._stack)
 
@@ -251,13 +286,7 @@ class LoginWindow(QDialog):
         self._stack.addWidget(self._page_b)  # index 0
         self._stack.addWidget(self._page_a)  # index 1
 
-        # Error label (shared, below card)
         outer.addSpacing(10)
-        self._error_label = QLabel("")
-        self._error_label.setObjectName("error")
-        self._error_label.setWordWrap(True)
-        self._error_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._error_label.setVisible(False)
         outer.addWidget(self._error_label)
         outer.addStretch()
 
@@ -309,44 +338,74 @@ class LoginWindow(QDialog):
         self._broker_combo = QComboBox()
         for display_name in _BROKER_MAP:
             self._broker_combo.addItem(display_name)
+        self._broker_combo.currentTextChanged.connect(self._on_broker_changed)
         layout.addWidget(self._broker_combo)
 
-        # API Key
-        layout.addWidget(QLabel("API Key"))
+        # ── Angel field group ──────────────────────────────────────────
+        self._angel_group = QWidget()
+        ag = QVBoxLayout(self._angel_group)
+        ag.setContentsMargins(0, 0, 0, 0)
+        ag.setSpacing(10)
+
+        ag.addWidget(QLabel("API Key"))
         self._api_key_field = QLineEdit()
         self._api_key_field.setPlaceholderText("Your Angel API key")
-        layout.addWidget(self._api_key_field)
+        ag.addWidget(self._api_key_field)
 
-        # Client ID
-        layout.addWidget(QLabel("Client ID"))
+        ag.addWidget(QLabel("Client ID"))
         self._client_id_field = QLineEdit()
         self._client_id_field.setPlaceholderText("Angel client/login ID")
-        layout.addWidget(self._client_id_field)
+        ag.addWidget(self._client_id_field)
 
-        # Password
-        layout.addWidget(QLabel("Password"))
+        ag.addWidget(QLabel("Password"))
         self._password_field = QLineEdit()
         self._password_field.setPlaceholderText("Trading password")
         self._password_field.setEchoMode(QLineEdit.EchoMode.Password)
-        layout.addWidget(self._password_field)
+        ag.addWidget(self._password_field)
 
-        # TOTP Secret
-        layout.addWidget(QLabel("TOTP Secret"))
+        ag.addWidget(QLabel("TOTP Secret"))
         self._totp_field = QLineEdit()
         self._totp_field.setPlaceholderText("Base32 TOTP secret key")
         self._totp_field.setEchoMode(QLineEdit.EchoMode.Password)
-        layout.addWidget(self._totp_field)
+        ag.addWidget(self._totp_field)
+
+        layout.addWidget(self._angel_group)
+
+        # ── Kite field group ───────────────────────────────────────────
+        self._kite_group = QWidget()
+        kg = QVBoxLayout(self._kite_group)
+        kg.setContentsMargins(0, 0, 0, 0)
+        kg.setSpacing(10)
+
+        kg.addWidget(QLabel("API Key"))
+        self._kite_api_key_field = QLineEdit()
+        self._kite_api_key_field.setPlaceholderText("Your Kite Connect api_key")
+        kg.addWidget(self._kite_api_key_field)
+
+        kg.addWidget(QLabel("API Secret"))
+        self._kite_api_secret_field = QLineEdit()
+        self._kite_api_secret_field.setPlaceholderText("Your Kite Connect api_secret")
+        self._kite_api_secret_field.setEchoMode(QLineEdit.EchoMode.Password)
+        kg.addWidget(self._kite_api_secret_field)
+
+        kite_hint = QLabel(
+            f"Clicking Connect opens your browser to log in to Zerodha. "
+            f"Set your Kite app's redirect URL to http://127.0.0.1:{_DEFAULT_KITE_PORT}/"
+        )
+        kite_hint.setObjectName("hint")
+        kite_hint.setWordWrap(True)
+        kg.addWidget(kite_hint)
+
+        layout.addWidget(self._kite_group)
 
         layout.addSpacing(4)
 
-        # Save checkbox
         self._save_checkbox = QCheckBox("Save credentials to settings.yaml")
         self._save_checkbox.setChecked(True)
         layout.addWidget(self._save_checkbox)
 
         layout.addSpacing(8)
 
-        # Buttons row
         btn_row = QHBoxLayout()
         self._a_cancel_btn = QPushButton("Cancel")
         self._a_cancel_btn.setObjectName("cancel")
@@ -359,17 +418,26 @@ class LoginWindow(QDialog):
         btn_row.addWidget(self._a_connect_btn)
 
         layout.addLayout(btn_row)
+
+        self._on_broker_changed(self._broker_combo.currentText())
         return page
 
     # ------------------------------------------------------------------
     # Mode switching
     # ------------------------------------------------------------------
 
+    def _on_broker_changed(self, display_name: str) -> None:
+        is_kite = _BROKER_MAP.get(display_name) == "kite"
+        self._angel_group.setVisible(not is_kite)
+        self._kite_group.setVisible(is_kite)
+        self._clear_error()
+        self.adjustSize()
+
     def _show_mode_b(self) -> None:
         creds = self._saved_creds or {}
-        client_id = creds.get("client_id", "")
         broker_name = creds.get("_broker_display", "Angel SmartAPI")
-        self._b_welcome.setText(f"Welcome back, {client_id}")
+        label = creds.get("client_id") or broker_name
+        self._b_welcome.setText(f"Welcome back, {label}")
         self._b_broker_label.setText(broker_name)
         self._stack.setCurrentIndex(0)
         self._clear_error()
@@ -377,10 +445,18 @@ class LoginWindow(QDialog):
 
     def _show_mode_a(self, prefill: dict | None) -> None:
         if prefill:
-            self._api_key_field.setText(prefill.get("api_key", ""))
-            self._client_id_field.setText(prefill.get("client_id", ""))
-            self._password_field.setText(prefill.get("password", ""))
-            self._totp_field.setText(prefill.get("totp_secret", ""))
+            display = prefill.get("_broker_display", "Angel SmartAPI")
+            idx = self._broker_combo.findText(display)
+            if idx >= 0:
+                self._broker_combo.setCurrentIndex(idx)
+            if prefill.get("_broker_key") == "kite":
+                self._kite_api_key_field.setText(prefill.get("api_key", ""))
+                self._kite_api_secret_field.setText(prefill.get("api_secret", ""))
+            else:
+                self._api_key_field.setText(prefill.get("api_key", ""))
+                self._client_id_field.setText(prefill.get("client_id", ""))
+                self._password_field.setText(prefill.get("password", ""))
+                self._totp_field.setText(prefill.get("totp_secret", ""))
         self._stack.setCurrentIndex(1)
         self._clear_error()
         self.adjustSize()
@@ -394,17 +470,13 @@ class LoginWindow(QDialog):
     # ------------------------------------------------------------------
 
     def _on_cancel_mode_b(self) -> None:
-        """Cancel from Mode B — close dialog, stay disconnected."""
         self.reject()
 
     def _on_cancel_mode_a(self) -> None:
-        """Cancel from Mode A form."""
         if self._came_from_mode_b:
-            # Go back to returning-user view
             self._came_from_mode_b = False
             self._show_mode_b()
         elif self._is_first_launch:
-            # First launch cancel → signal app to exit
             from PySide6.QtWidgets import QApplication
             self.reject()
             QApplication.quit()
@@ -414,74 +486,137 @@ class LoginWindow(QDialog):
     def _on_connect_clicked(self) -> None:
         self._clear_error()
 
-        # Gather credentials
         if self._stack.currentIndex() == 0:
-            # Mode B — use saved credentials
-            creds = self._saved_creds or {}
+            creds = dict(self._saved_creds or {})
             broker_key = creds.get("_broker_key", "angel")
             should_save = False
         else:
-            # Mode A — read from form
-            api_key = self._api_key_field.text().strip()
-            client_id = self._client_id_field.text().strip()
-            password = self._password_field.text().strip()
-            totp_secret = self._totp_field.text().strip()
-            broker_display = self._broker_combo.currentText()
-            broker_key = _BROKER_MAP.get(broker_display, "angel")
-
-            if not all([api_key, client_id, password, totp_secret]):
-                self._show_error("All fields are required.")
+            creds, broker_key, should_save = self._gather_form_creds()
+            if creds is None:
                 return
 
-            creds = {
-                "api_key": api_key,
-                "client_id": client_id,
-                "password": password,
-                "totp_secret": totp_secret,
-                "_broker_key": broker_key,
-                "_broker_display": broker_display,
-            }
-            should_save = self._save_checkbox.isChecked()
-
-        # Instantiate and register the broker
+        # Instantiate and register the broker.
         try:
             BrokerManager.create_broker(broker_key, creds)
         except Exception as exc:
             self._show_error(f"Failed to initialise broker: {exc}")
             return
 
+        # Decide whether the Kite interactive browser flow is needed.
+        kite_auth = False
+        login_url = ""
+        port = int(creds.get("redirect_port", _DEFAULT_KITE_PORT) or _DEFAULT_KITE_PORT)
+        self._last_kite_cached = False
+        if broker_key == "kite":
+            today = date.today().isoformat()
+            has_valid_cache = bool(creds.get("access_token")) and (
+                creds.get("access_token_date") == today
+            )
+            if has_valid_cache:
+                self._last_kite_cached = True
+            else:
+                kite_auth = True
+                try:
+                    login_url = BrokerManager.get_broker().login_url()
+                except Exception as exc:
+                    self._show_error(f"Could not build Kite login URL: {exc}")
+                    return
+
         self._pending_creds = creds
         self._pending_save = should_save
+        self._set_connecting(True, kite_auth)
 
-        # Disable buttons, show "Connecting…"
-        self._set_connecting(True)
-
-        self._worker = _ConnectWorker(self)
+        self._worker = _ConnectWorker(
+            kite_auth=kite_auth, login_url=login_url, port=port, parent=self
+        )
         self._worker.success.connect(self._on_connect_success)
         self._worker.failure.connect(self._on_connect_failure)
         self._worker.start()
 
+    def _gather_form_creds(self):
+        """Read + validate the Mode A form. Returns (creds, broker_key, save) or (None,..)."""
+        broker_display = self._broker_combo.currentText()
+        broker_key = _BROKER_MAP.get(broker_display, "angel")
+        should_save = self._save_checkbox.isChecked()
+
+        if broker_key == "kite":
+            api_key = self._kite_api_key_field.text().strip()
+            api_secret = self._kite_api_secret_field.text().strip()
+            if not all([api_key, api_secret]):
+                self._show_error("API Key and API Secret are required.")
+                return None, broker_key, should_save
+            creds = {
+                "api_key": api_key,
+                "api_secret": api_secret,
+                "redirect_port": _DEFAULT_KITE_PORT,
+                "_broker_key": "kite",
+                "_broker_display": broker_display,
+            }
+        else:
+            api_key = self._api_key_field.text().strip()
+            client_id = self._client_id_field.text().strip()
+            password = self._password_field.text().strip()
+            totp_secret = self._totp_field.text().strip()
+            if not all([api_key, client_id, password, totp_secret]):
+                self._show_error("All fields are required.")
+                return None, broker_key, should_save
+            creds = {
+                "api_key": api_key,
+                "client_id": client_id,
+                "password": password,
+                "totp_secret": totp_secret,
+                "_broker_key": "angel",
+                "_broker_display": broker_display,
+            }
+        return creds, broker_key, should_save
+
     def _on_connect_success(self) -> None:
-        creds = self._pending_creds
-        if self._pending_save:
+        creds = dict(self._pending_creds)
+
+        # For Kite, capture the freshly issued access_token for same-day reuse
+        # and the user_id for the Mode B welcome line.
+        if creds.get("_broker_key") == "kite":
+            broker = BrokerManager.get_broker()
+            creds["access_token"] = getattr(broker, "access_token", "")
+            creds["access_token_date"] = getattr(broker, "access_token_date", "")
+            try:
+                profile = broker.get_profile()
+                creds["client_id"] = profile.get("user_id", creds.get("client_id", ""))
+            except Exception:
+                pass
+            # Always persist the refreshed token (even if the user didn't tick
+            # "save"), but only when credentials were already being saved.
+            if self._pending_save or self._saved_creds:
+                _save_credentials(creds)
+        elif self._pending_save:
             _save_credentials(creds)
 
         client_id = creds.get("client_id", "")
         broker_display = creds.get("_broker_display", "Angel SmartAPI")
-
         self.login_successful.emit(client_id, broker_display)
         self.accept()
 
     def _on_connect_failure(self, message: str) -> None:
         self._set_connecting(False)
-        self._show_error(f"Connection failed: {message}")
+        # If a cached Kite token was rejected, drop it so the next click logs in.
+        if self._last_kite_cached and self._saved_creds:
+            self._saved_creds["access_token"] = ""
+            self._saved_creds["access_token_date"] = ""
+            self._show_error(f"{message}\nClick Connect to log in again.")
+        else:
+            self._show_error(f"Connection failed: {message}")
 
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
 
-    def _set_connecting(self, connecting: bool) -> None:
-        label = "Connecting…" if connecting else "Connect"
+    def _set_connecting(self, connecting: bool, kite_auth: bool = False) -> None:
+        if connecting and kite_auth:
+            label = "Waiting for browser login…"
+        elif connecting:
+            label = "Connecting…"
+        else:
+            label = "Connect"
         if self._stack.currentIndex() == 0:
             self._b_connect_btn.setText(label)
             self._b_connect_btn.setEnabled(not connecting)
@@ -504,49 +639,94 @@ class LoginWindow(QDialog):
 # Config I/O helpers (module-level, not part of the dialog class)
 # ------------------------------------------------------------------
 
-def _load_saved_credentials() -> dict | None:
-    """Return saved credentials if settings.yaml exists and has broker credentials."""
+def _read_settings() -> dict:
     if not os.path.exists(_SETTINGS_PATH):
-        return None
+        return {}
     try:
         with open(_SETTINGS_PATH, "r", encoding="utf-8") as f:
-            data = yaml.safe_load(f) or {}
-        broker = data.get("broker", {})
-        required = ("api_key", "client_id", "password", "totp_secret")
-        if not all(broker.get(k) for k in required):
+            return yaml.safe_load(f) or {}
+    except Exception as exc:
+        logger.warning("Could not read settings.yaml: %s", exc)
+        return {}
+
+
+def _migrate_flat_angel(broker: dict) -> None:
+    """Move legacy flat Angel keys under a nested ``angel`` sub-dict in place."""
+    if "angel" in broker or "kite" in broker:
+        return
+    legacy_keys = ("api_key", "client_id", "password", "totp_secret")
+    if any(k in broker for k in legacy_keys):
+        broker["angel"] = {k: broker.pop(k) for k in legacy_keys if k in broker}
+
+
+def _load_saved_credentials() -> dict | None:
+    """Return saved credentials for the active broker, or None if incomplete."""
+    data = _read_settings()
+    broker = data.get("broker", {})
+    if not broker:
+        return None
+
+    _migrate_flat_angel(broker)
+    name = broker.get("name", "angel")
+    sub = broker.get(name, {})
+
+    if name == "kite":
+        if not (sub.get("api_key") and sub.get("api_secret")):
             return None
         return {
-            "api_key": broker["api_key"],
-            "client_id": broker["client_id"],
-            "password": broker["password"],
-            "totp_secret": broker["totp_secret"],
-            "_broker_key": broker.get("name", "angel"),
-            "_broker_display": _broker_key_to_display(broker.get("name", "angel")),
+            "_broker_key": "kite",
+            "_broker_display": "Zerodha Kite",
+            "api_key": sub["api_key"],
+            "api_secret": sub["api_secret"],
+            "redirect_port": sub.get("redirect_port", _DEFAULT_KITE_PORT),
+            "access_token": sub.get("access_token", ""),
+            "access_token_date": sub.get("access_token_date", ""),
+            "client_id": sub.get("user_id", ""),
         }
-    except Exception as exc:
-        logger.warning("Could not load saved credentials: %s", exc)
+
+    required = ("api_key", "client_id", "password", "totp_secret")
+    if not all(sub.get(k) for k in required):
         return None
+    return {
+        "_broker_key": "angel",
+        "_broker_display": "Angel SmartAPI",
+        "api_key": sub["api_key"],
+        "client_id": sub["client_id"],
+        "password": sub["password"],
+        "totp_secret": sub["totp_secret"],
+    }
 
 
 def _save_credentials(creds: dict) -> None:
-    """Write credentials to config/settings.yaml (full structure)."""
+    """Persist credentials for the active broker, preserving the other broker's."""
+    data = _read_settings()
+    broker = data.setdefault("broker", {})
+    _migrate_flat_angel(broker)
+
+    key = creds.get("_broker_key", "angel")
+    broker["name"] = key
+    sub = broker.setdefault(key, {})
+
+    if key == "kite":
+        sub["api_key"] = creds.get("api_key", "")
+        sub["api_secret"] = creds.get("api_secret", "")
+        sub["redirect_port"] = creds.get("redirect_port", _DEFAULT_KITE_PORT)
+        sub["access_token"] = creds.get("access_token", "")
+        sub["access_token_date"] = creds.get("access_token_date", "")
+        if creds.get("client_id"):
+            sub["user_id"] = creds["client_id"]
+    else:
+        sub["api_key"] = creds.get("api_key", "")
+        sub["client_id"] = creds.get("client_id", "")
+        sub["password"] = creds.get("password", "")
+        sub["totp_secret"] = creds.get("totp_secret", "")
+
+    data.setdefault("app", {"theme": "dark", "log_level": "INFO"})
+
     os.makedirs(os.path.dirname(_SETTINGS_PATH), exist_ok=True)
-    data = {
-        "broker": {
-            "name": creds.get("_broker_key", "angel"),
-            "api_key": creds.get("api_key", ""),
-            "client_id": creds.get("client_id", ""),
-            "password": creds.get("password", ""),
-            "totp_secret": creds.get("totp_secret", ""),
-        },
-        "app": {
-            "theme": "dark",
-            "log_level": "INFO",
-        },
-    }
     with open(_SETTINGS_PATH, "w", encoding="utf-8") as f:
         yaml.safe_dump(data, f, default_flow_style=False, allow_unicode=True)
-    logger.info("Credentials saved to %s", _SETTINGS_PATH)
+    logger.info("Credentials saved to %s (broker=%s)", _SETTINGS_PATH, key)
 
 
 def _broker_key_to_display(key: str) -> str:

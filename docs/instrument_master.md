@@ -112,8 +112,20 @@ if InstrumentMaster.is_loaded():
 - `strike` is `"-1"` for non-options.
 - `exch_seg` maps to the `Instrument.exchange` field (`"NSE"`, `"BSE"`, `"NFO"`, `"MCX"`).
 
+## Canonical schema (current)
+
+`InstrumentMaster` no longer parses broker-specific fields. It fetches records via
+`broker.fetch_instruments()` — each broker maps its native dump into the
+**canonical schema** (see `docs/broker_api.md`): keys `symbol`, `token`,
+`exchange`, `name`, `instrument_type` (`EQ`/`FUT`/`CE`/`PE`), `expiry` (ISO
+`YYYY-MM-DD`), `strike` (rupees), `lot_size`, `tick_size` (rupees).
+
+Cache files are `data/instrument_master/{broker_key}_v2_{YYYY-MM-DD}.json` (the
+`v2` marks the canonical format, distinct from older Angel-raw caches).
+
 ## Adding a New Broker
 
-1. Implement `broker_key` and `instrument_master_url` properties in the new broker class.
-2. The JSON at that URL must be an array of objects with at minimum: `token`, `symbol`,
-   `name`, `exch_seg`.  Override `_to_instrument()` if the field names differ.
+1. Implement `fetch_instruments()` in the new broker class, returning canonical
+   records (do all unit/format normalisation there).
+2. `InstrumentMaster` and `option_chain_builder` consume canonical keys directly —
+   no per-broker code needed in either.

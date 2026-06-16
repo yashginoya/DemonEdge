@@ -28,8 +28,10 @@ class _BrokerManager:
         """Factory: instantiate the named broker, register it, and return it.
 
         Args:
-            broker_name: "angel" (only supported option for now).
-            credentials: dict with keys api_key, client_id, password, totp_secret.
+            broker_name: "angel" or "kite".
+            credentials: broker-specific credentials dict.
+                angel → api_key, client_id, password, totp_secret.
+                kite  → api_key, api_secret, [access_token, access_token_date].
 
         Raises:
             ValueError: if broker_name is not recognised.
@@ -37,8 +39,13 @@ class _BrokerManager:
         if broker_name == "angel":
             from broker.angel_broker import AngelBroker
             broker: BaseBroker = AngelBroker(credentials)
+        elif broker_name == "kite":
+            from broker.kite_broker import KiteBroker
+            broker = KiteBroker(credentials)
         else:
-            raise ValueError(f"Unknown broker: {broker_name!r}. Supported: 'angel'")
+            raise ValueError(
+                f"Unknown broker: {broker_name!r}. Supported: 'angel', 'kite'"
+            )
         self.set_broker(broker)
         return broker
 

@@ -133,3 +133,34 @@ app:
 ```
 
 Never written with partial data — always the complete structure or not at all.
+
+## Broker-aware login (Angel + Zerodha Kite)
+
+The login dialog has a **broker dropdown**. Credentials are stored in per-broker
+sub-sections so both can be configured:
+
+```yaml
+broker:
+  name: kite            # active broker
+  angel: { api_key, client_id, password, totp_secret }
+  kite:  { api_key, api_secret, redirect_port, access_token, access_token_date }
+```
+
+Legacy flat-Angel `settings.yaml` files are auto-migrated under `broker.angel`.
+
+### Angel
+TOTP form (api_key / client_id / password / totp_secret) → `broker.connect()`
+authenticates directly.
+
+### Zerodha Kite (OAuth redirect)
+1. Form collects `api_key` + `api_secret` only.
+2. On Connect, a worker thread runs `broker/kite_auth.py` →
+   `capture_request_token()`: starts a localhost server on
+   `http://127.0.0.1:5010/` and opens the system browser to Zerodha's login page.
+   **This URL must match the redirect URL registered in the Kite developer app.**
+3. After login, Zerodha redirects with a one-time `request_token`, captured by the
+   local server; `KiteBroker.connect()` exchanges it (with `api_secret`) for the
+   daily `access_token`.
+4. The `access_token` is cached in `settings.yaml` with its date. On a same-day
+   relaunch the cached token is validated silently (no browser). It expires at
+   ~6 AM IST; an expired/rejected token falls back to the browser flow.

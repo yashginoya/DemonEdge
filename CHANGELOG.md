@@ -2,6 +2,39 @@
 
 ---
 
+## 2026-06-16 — feat: Zerodha Kite broker + feed (coexists with Angel)
+
+### Added
+- `broker/kite_broker.py` — `KiteBroker(BaseBroker)` wrapping the official `kiteconnect.KiteConnect`. Implements the full interface: OAuth session (`connect()` consumes a request_token → access_token, or validates a cached token), profile/holdings/positions, order book, `place_order`/`cancel_order`, `get_ltp`/`get_quote` (by numeric instrument_token), `get_order_margin` (resolves token→symbol via InstrumentMaster, calls `order_margins`), `get_historical_data`, `get_index_info` (resolves index tokens live from the public instrument dump), and `fetch_instruments` (uses Kite's public `/instruments` dump — no auth required). Translates the app's Angel-style order/margin vocabulary into Kite's (MIS/CNC/NRML product by segment, SL/SL-M order types, `minute`/`day` intervals). Bracket/ROBO orders are not supported on Kite — logged and downgraded to a regular order.
+- `broker/kite_auth.py` — `capture_request_token()`: pure-stdlib localhost HTTP server (default `127.0.0.1:5010`) that opens the system browser to Zerodha's login page and blocks until the redirect delivers the one-time `request_token`. Must be called off the Qt thread.
+- `feed/kite_feed.py` — `KiteFeed(BaseFeed)` wrapping `kiteconnect.KiteTicker`. Subscribes by integer instrument_token, maps our SubscriptionMode→Kite mode (ltp/quote/full, richest-per-token), converts each Kite tick dict → `Tick`, dispatches + re-emits on the existing `MarketFeedSignals`. Auto-resubscribes on (re)connect. Singleton; does NOT auto-register (selected via FeedManager).
+- `broker/base_broker.py` — new abstract `fetch_instruments() -> list[dict]` returning a broker-neutral **canonical instrument schema** (keys: symbol, token, exchange, name, instrument_type[`EQ`/`FUT`/`CE`/`PE`], expiry[ISO], strike[rupees], lot_size, tick_size[rupees]).
+- `feed/feed_manager.py` — `FeedManager.create_feed(broker_key)` factory (mirrors `BrokerManager.create_broker`) so the active feed matches the active broker.
+
+### Changed
+- `broker/instrument_master.py` — refactored to the canonical schema. Fetches via `broker.fetch_instruments()` instead of downloading a URL; caches as `{broker_key}_v2_{date}.json`; `_build_index`/`search`/`_to_instrument` now use canonical keys (no more paise/Angel-date conversions here). Removed `_download`/urllib.
+- `broker/angel_broker.py` — implemented `fetch_instruments()`: downloads OpenAPIScripMaster JSON and maps to canonical (exch_seg→exchange, OPTIDX/OPTSTK→CE/PE, paise→rupees strike/tick, `28NOV2024`→ISO via new `_angel_expiry_to_iso`).
+- `widgets/option_chain/option_chain_builder.py` — canonical keys: filter `instrument_type in {CE,PE}`, strike in rupees (no `/100`), exchange key, ISO expiry parsing (`%Y-%m-%d`).
+- `widgets/option_chain/option_chain_widget.py` — `_time_to_expiry` parses ISO expiry; stock-underlying LTP lookup is now broker-agnostic (no `-EQ` suffix assumption); fallback Instrument uses canonical `instrument_type`.
+- `broker/broker_manager.py` — `create_broker` adds a `"kite"` branch.
+- `app/login_window.py` — broker-aware: broker dropdown (Angel/Kite), per-broker field groups (Angel: api_key/client_id/password/totp; Kite: api_key/api_secret), Kite interactive browser-login worker, and broker-aware nested `settings.yaml` storage with legacy flat-Angel migration. Kite access_token cached + reused same-day; expired cached token auto-falls back to re-login.
+- `app/main_window.py` — `on_login_success` selects the feed via `FeedManager.create_feed(broker.broker_key)` before connecting.
+- `config/settings.example.yaml` — restructured to per-broker sub-sections (`broker.angel.*`, `broker.kite.*`) with `broker.name` selecting the active broker.
+- `pyproject.toml` / `uv.lock` — added `kiteconnect` (pulls in Twisted/Autobahn for the WebSocket).
+
+### Architecture Decisions
+- **Canonical instrument schema** chosen over an Angel-flavoured adapter: both brokers map their dump into one broker-neutral record shape. Cleaner long-term; `option_chain_builder` and `InstrumentMaster` were updated to match. Existing Angel option-chain expiry display changes from `28NOV2024` to ISO `2024-11-28`.
+- **Kite auth = local redirect-capture server** on `http://127.0.0.1:5010/` (must match the redirect URL in the Kite developer app). Access token is cached per trading day; re-login only after the ~6 AM expiry or a TokenException.
+- **Kite & Angel coexist** — selectable in the login dialog; both can be configured in `settings.yaml`.
+
+### Known Issues / TODOs
+- Kite index tokens resolve **live from the instrument dump** (`InstrumentMaster.get_by_symbol`, segment INDICES) by well-known trading symbols (e.g. NIFTY→`NIFTY 50`); hardcoded tokens in `KiteBroker._INDEX_FALLBACK` are only used if the master isn't loaded. If an index alias→symbol is wrong, the chain underlying LTP won't resolve — verify the alias map against the dump.
+- `KiteFeed` ticks do not carry circuit limits / 52-week range (Kite's ticker doesn't stream them) — those Market Depth fields stay blank on Kite.
+- Bracket (ROBO) orders are unsupported on Kite (downgraded to regular).
+- Twisted's reactor is process-global and cannot restart once stopped — switching brokers mid-session (logout→login to the other broker's feed) is untested; `disconnect` only closes the socket.
+
+---
+
 ## 2026-03-12 — refactor: Broker-abstraction cleanup (index tokens + BaseFeed/FeedManager)
 
 ### Added

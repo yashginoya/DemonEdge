@@ -215,11 +215,15 @@ class _ChainLoadWorker(QRunnable):
                 if idx_info:
                     ltp = broker.get_ltp(idx_info["exchange"], idx_info["token"])
                 else:
-                    # Stock — search for EQ token
+                    # Stock — find the cash-equity token (broker-agnostic).
                     from broker.instrument_master import InstrumentMaster
-                    results = InstrumentMaster.search(f"{self._underlying}-EQ", exchange="NSE", max_results=5)
-                    if results:
-                        ltp = broker.get_ltp(results[0].exchange, results[0].token)
+                    results = InstrumentMaster.search(self._underlying, exchange="NSE", max_results=10)
+                    eq = next(
+                        (r for r in results if r.instrument_type == "EQ"),
+                        results[0] if results else None,
+                    )
+                    if eq:
+                        ltp = broker.get_ltp(eq.exchange, eq.token)
             except Exception as exc:
                 logger.warning("Could not fetch underlying LTP: %s", exc)
 
@@ -502,7 +506,7 @@ class OptionChainWidget(BaseWidget):
                 token=token,
                 exchange="NFO",
                 name=token,
-                instrument_type="OPTIDX",
+                instrument_type=side if side in ("CE", "PE") else "OTHER",
             )
 
         from PySide6.QtWidgets import QApplication
@@ -832,7 +836,7 @@ class OptionChainWidget(BaseWidget):
         if not self._current_expiry:
             return 0.0
         try:
-            expiry_date = datetime.strptime(self._current_expiry, "%d%b%Y").date()
+            expiry_date = datetime.strptime(self._current_expiry, "%Y-%m-%d").date()
             today = date.today()
             days  = (expiry_date - today).days
             return max(days / 365.0, 0.0)

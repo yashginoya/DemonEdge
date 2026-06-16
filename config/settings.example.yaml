@@ -1,9 +1,25 @@
+# DemonEdge configuration template.
+# Copy to settings.yaml and fill in credentials for the broker you use.
+# `broker.name` selects the active broker ("angel" or "kite").
+# Credentials live in per-broker sub-sections so both can be configured.
+
 broker:
-  name: angel
-  api_key: YOUR_API_KEY
-  client_id: YOUR_CLIENT_ID
-  password: YOUR_PASSWORD
-  totp_secret: YOUR_TOTP_SECRET
+  name: angel            # active broker: "angel" or "kite"
+
+  angel:
+    api_key: YOUR_API_KEY
+    client_id: YOUR_CLIENT_ID
+    password: YOUR_PASSWORD
+    totp_secret: YOUR_TOTP_SECRET
+
+  kite:
+    api_key: YOUR_KITE_API_KEY
+    api_secret: YOUR_KITE_API_SECRET
+    # Must match the redirect URL registered in your Kite developer app.
+    redirect_port: 5010
+    # Filled in automatically after login (cached for same-day reuse):
+    access_token: ""
+    access_token_date: ""
 
 app:
   theme: dark

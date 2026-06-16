@@ -160,3 +160,29 @@ to restore all previously subscribed tokens — no application code needed.
 
 New subscriptions added while the feed is disconnected are queued in `_pending`
 and flushed when `_on_open` fires.
+
+## Feed Implementations & Selection
+
+The canonical interface is `BaseFeed` (`feed/base_feed.py`); access the active
+feed via `FeedManager.get_feed()`. Two implementations exist:
+
+| Broker | Class | Library |
+|---|---|---|
+| `angel` | `feed/market_feed.py` `AngelFeed` | `SmartWebSocketV2` |
+| `kite` | `feed/kite_feed.py` `KiteFeed` | `kiteconnect.KiteTicker` |
+
+`FeedManager.create_feed(broker_key)` selects and registers the feed matching the
+active broker — `MainWindow.on_login_success()` calls it before `feed.connect()`.
+`AngelFeed` auto-registers as the lazy default on import; `KiteFeed` does not.
+
+### `KiteFeed` notes
+- Subscribes by **integer instrument_token**; maps our `SubscriptionMode`
+  (LTP/QUOTE/SNAP_QUOTE) → Kite modes (`ltp`/`quote`/`full`), keeping the richest
+  mode requested per token.
+- `KiteTicker.connect(threaded=True)` runs Twisted's reactor on a daemon thread,
+  so `on_ticks` (and the other callbacks) fire off the Qt thread — `KiteFeed`
+  re-emits via the same `MarketFeedSignals` bridge. The library auto-reconnects;
+  `KiteFeed._on_connect` resubscribes everything.
+- Kite's ticker does not stream circuit limits or the 52-week range, so those
+  `Tick` fields stay `None` on Kite. The reactor is process-global and cannot be
+  restarted once stopped, so `disconnect()` only closes the socket.

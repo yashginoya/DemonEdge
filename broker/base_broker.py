@@ -29,7 +29,41 @@ class BaseBroker(ABC):
     @property
     @abstractmethod
     def instrument_master_url(self) -> str:
-        """URL to download the full instrument master JSON (no auth required)."""
+        """URL/identifier for the broker's full instrument dump.
+
+        Informational only — ``InstrumentMaster`` fetches the dump via
+        :meth:`fetch_instruments`, not by reading this URL directly.
+        """
+        ...
+
+    @abstractmethod
+    def fetch_instruments(self) -> list[dict]:
+        """Download the broker's full instrument dump as canonical records.
+
+        Each broker maps its native dump (Angel JSON, Kite CSV, …) into a
+        **broker-neutral canonical schema** so the rest of the app never sees
+        broker-specific field names or unit conventions.  ``InstrumentMaster``
+        caches and indexes exactly these records.
+
+        Returns a list of dicts, each with these keys:
+
+        ===============  ======  ==================================================
+        key              type    meaning
+        ===============  ======  ==================================================
+        ``symbol``       str     trading symbol (e.g. ``"INFY"``, ``"NIFTY24JUL...CE"``)
+        ``token``        str     broker instrument token (string)
+        ``exchange``     str     ``"NSE"``/``"NFO"``/``"BSE"``/``"BFO"``/``"MCX"``/…
+        ``name``         str     underlying / company name (used to group options)
+        ``instrument_type`` str  canonical: ``"EQ"``/``"FUT"``/``"CE"``/``"PE"`` or raw
+        ``expiry``       str     ISO ``"YYYY-MM-DD"``; ``""`` for non-derivatives
+        ``strike``       float   strike in **rupees**; ``-1.0`` for non-options
+        ``lot_size``     int     contract lot size (``1`` for equity)
+        ``tick_size``    float   minimum price move in **rupees**
+        ===============  ======  ==================================================
+
+        Runs network/parse work — call from a worker thread, not the Qt thread.
+        Raises ``BrokerAPIError`` on failure.
+        """
         ...
 
     @abstractmethod

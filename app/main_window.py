@@ -341,18 +341,20 @@ class MainWindow(QMainWindow):
 
         logger.info("Terminal connected: broker=%s client=%s", broker_name, client_id)
 
-        # Wire feed signals to status bar indicators (connect once)
-        feed_signals = FeedManager.get_feed().signals
+        # Select the feed implementation matching the active broker, then wire
+        # its signals to the status-bar indicators.
+        broker = BrokerManager.get_broker()
+        feed = FeedManager.create_feed(broker.broker_key)
+        feed_signals = feed.signals
         feed_signals.feed_connected.connect(self._on_feed_connected)
         feed_signals.feed_disconnected.connect(self._on_feed_disconnected)
         feed_signals.feed_error.connect(self._on_feed_error)
 
         # Start the WebSocket feed
         try:
-            broker = BrokerManager.get_broker()
-            FeedManager.get_feed().connect(broker)
+            feed.connect(broker)
         except Exception as exc:
-            logger.error("Failed to start MarketFeed: %s", exc)
+            logger.error("Failed to start market feed: %s", exc)
 
         # Load instrument master in background
         self._load_instrument_master()

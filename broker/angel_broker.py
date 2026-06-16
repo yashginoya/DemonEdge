@@ -141,6 +141,79 @@ class AngelBroker(BaseBroker):
         return self._INDEX_INFO.get(symbol.upper())
 
     # ------------------------------------------------------------------
+    # Instrument master
+    # ------------------------------------------------------------------
+
+    def fetch_instruments(self) -> list[dict]:
+        """Download Angel's OpenAPIScripMaster JSON and map to canonical records.
+
+        Angel quirks normalised here so the rest of the app stays broker-neutral:
+          * ``exch_seg``        → ``exchange``
+          * ``instrumenttype``  → canonical ``EQ`` / ``FUT`` / ``CE`` / ``PE``
+          * ``strike`` (paise)  → rupees
+          * ``tick_size`` (paise) → rupees
+          * ``expiry`` (``28NOV2024``) → ISO ``2024-11-28``
+        """
+        url = self.instrument_master_url
+        logger.info("AngelBroker: downloading instrument master from %s", url)
+        try:
+            import json as _json
+            import urllib.request
+
+            req = urllib.request.Request(
+                url,
+                headers={
+                    "User-Agent": (
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/120 Safari/537.36"
+                    )
+                },
+            )
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                raw = _json.loads(resp.read())
+        except Exception as exc:
+            logger.exception("AngelBroker.fetch_instruments() download failed")
+            raise BrokerAPIError(f"fetch_instruments failed: {exc}") from exc
+
+        records: list[dict] = []
+        for item in raw:
+            symbol = item.get("symbol", "")
+            raw_type = (item.get("instrumenttype") or "").upper()
+
+            # Canonical instrument_type
+            if raw_type in ("OPTIDX", "OPTSTK"):
+                inst_type = "CE" if symbol.upper().endswith("CE") else "PE"
+            elif raw_type.startswith("FUT"):
+                inst_type = "FUT"
+            elif raw_type in ("", "EQ"):
+                inst_type = "EQ"
+            else:
+                inst_type = raw_type
+
+            # strike & tick_size: Angel stores both in paise
+            strike_paise = _safe_float(item.get("strike", "-1"))
+            strike = strike_paise / 100.0 if strike_paise > 0 else -1.0
+            tick_size = _safe_float(item.get("tick_size", "5")) / 100.0
+            if tick_size <= 0.0:
+                tick_size = 0.05
+
+            records.append({
+                "symbol": symbol,
+                "token": item.get("token", ""),
+                "exchange": item.get("exch_seg", ""),
+                "name": item.get("name", ""),
+                "instrument_type": inst_type,
+                "expiry": _angel_expiry_to_iso(item.get("expiry", "")),
+                "strike": strike,
+                "lot_size": _safe_int(item.get("lotsize", "1")) or 1,
+                "tick_size": tick_size,
+            })
+
+        logger.info("AngelBroker: parsed %d instruments", len(records))
+        return records
+
+    # ------------------------------------------------------------------
     # Account
     # ------------------------------------------------------------------
 
@@ -551,6 +624,19 @@ class AngelBroker(BaseBroker):
                 f"{method_name}: unexpected response type {type(resp).__name__}: {resp!r}"
             )
         return resp
+
+
+def _angel_expiry_to_iso(value: str) -> str:
+    """Convert an Angel expiry (e.g. ``28NOV2024``) to ISO ``2024-11-28``.
+
+    Returns ``""`` for empty/unparseable values (non-derivative instruments).
+    """
+    if not value:
+        return ""
+    try:
+        return datetime.strptime(value, "%d%b%Y").date().isoformat()
+    except (ValueError, TypeError):
+        return ""
 
 
 def _parse_datetime(value: str) -> datetime:

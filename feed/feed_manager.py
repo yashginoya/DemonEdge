@@ -56,5 +56,31 @@ class _FeedManager:
             )
         return self._feed
 
+    def create_feed(self, broker_key: str) -> BaseFeed:
+        """Factory: select and register the feed matching the active broker.
+
+        Mirrors ``BrokerManager.create_broker`` — call this on login so the
+        active feed always matches the active broker.
+
+        Args:
+            broker_key: "angel" or "kite".
+
+        Raises:
+            ValueError: if broker_key is not recognised.
+        """
+        if broker_key == "angel":
+            import feed.market_feed  # noqa: F401 — registers AngelFeed
+            from feed.market_feed import AngelFeed
+            feed: BaseFeed = AngelFeed()
+        elif broker_key == "kite":
+            from feed.kite_feed import KiteFeed
+            feed = KiteFeed()
+        else:
+            raise ValueError(
+                f"Unknown broker for feed: {broker_key!r}. Supported: 'angel', 'kite'"
+            )
+        self.set_feed(feed)
+        return feed
+
 
 FeedManager = _FeedManager()

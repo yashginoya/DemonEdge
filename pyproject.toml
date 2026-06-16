@@ -5,6 +5,7 @@ description = "Python desktop trading terminal built with PySide6"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "kiteconnect>=5.2.0",
     "logzero>=1.7.0",
     "numpy>=2.4.2",
     "pyotp>=2.9.0",
