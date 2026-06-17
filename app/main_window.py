@@ -36,6 +36,7 @@ import widgets.positions.positions_widget  # noqa: F401
 import widgets.feed_status.feed_status_widget  # noqa: F401
 import widgets.option_chain  # noqa: F401
 import widgets.market_depth  # noqa: F401
+import widgets.bid_ask_watcher.bid_ask_watcher_widget  # noqa: F401
 
 from widgets.log_viewer.log_viewer_widget import LogViewerWindow
 

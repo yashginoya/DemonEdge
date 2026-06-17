@@ -254,3 +254,32 @@ double-subscribing. `subscribe_all()` is idempotent.
 | `order_entry` | Order Entry | Orders | `widgets/order_entry/order_entry_widget.py` | Placeholder (Phase 5) |
 | `positions` | Positions & P&L | Orders | `widgets/positions/positions_widget.py` | Placeholder (Phase 5) |
 | `feed_status` | Feed Status | System | `widgets/feed_status/feed_status_widget.py` | Live (Phase 4) |
+| `option_chain` | Option Chain | Market Data | `widgets/option_chain/option_chain_widget.py` | Live |
+| `market_depth` | Market Depth | Market Data | `widgets/market_depth/market_depth_widget.py` | Live |
+| `bid_ask_watcher` | Bid/Ask Watcher | Market Data | `widgets/bid_ask_watcher/bid_ask_watcher_widget.py` | Live |
+
+## Bid/Ask Quantity Watcher (`widgets/bid_ask_watcher/`)
+
+Watches, per underlying, the **total bid** and **total ask** quantity summed
+across N near-the-money option strikes:
+
+* **Call** legs = ATM CE + the next `N-1` CE strikes **above** ATM (OTM calls).
+* **Put** legs  = ATM PE + the next `N-1` PE strikes **below** ATM (OTM puts).
+
+`total_buy_quantity` (bid) and `total_sell_quantity` (ask) stream live in QUOTE
+mode. Columns: `Symbol | N | ATM | Expiry | Call Bid | Call Ask | C B/A | Put Bid
+| Put Ask | P B/A` (B/A = bid÷ask ratio; ≥1 green, <1 red).
+
+Add an underlying via **+ Add Symbol** (type NIFTY / BANKNIFTY / RELIANCE, pick
+expiry + strike count). Right-click a row → **Configure…** to change expiry or
+strike count, **Remove** (or Delete key).
+
+Structure:
+- `ticker_watch.py` — `TickerWatch(QObject)`: one underlying. Resolves the chain
+  (`option_chain_builder`) + underlying token (`get_index_info` / EQ search),
+  subscribes the underlying (LTP) and the option legs (QUOTE), accumulates
+  bid/ask per token, and **re-centers the strike window live** as ATM moves.
+- `bid_ask_model.py` — table model reading live values off each `TickerWatch`.
+- `add_ticker_dialog.py` — add / configure dialog (underlying + expiry + N).
+- `bid_ask_watcher_widget.py` — `BaseWidget`; owns the `TickerWatch` rows,
+  coalesces tick updates to ~10 Hz, persists `{underlying, expiry, num_strikes}`.

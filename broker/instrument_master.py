@@ -66,6 +66,7 @@ class _InstrumentMaster:
             cls._instance._index: list[tuple[str, str, dict]] = []
             cls._instance._token_map: dict[str, dict] = {}
             cls._instance._symbol_map: dict[str, dict] = {}
+            cls._instance._option_underlyings: list[str] | None = None
         return cls._instance
 
     # ------------------------------------------------------------------
@@ -186,6 +187,22 @@ class _InstrumentMaster:
             return None
         return self._to_instrument(record)
 
+    def option_underlyings(self) -> list[str]:
+        """Return sorted distinct underlying names that have listed options (CE/PE).
+
+        Useful for autocomplete where only option-bearing underlyings are valid.
+        Computed once and cached for the loaded dump.
+        """
+        if self._option_underlyings is None:
+            names: set[str] = set()
+            for _sym, _name, rec in self._index:
+                if rec.get("instrument_type") in ("CE", "PE"):
+                    nm = rec.get("name", "")
+                    if nm:
+                        names.add(nm)
+            self._option_underlyings = sorted(names)
+        return self._option_underlyings
+
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
@@ -225,6 +242,7 @@ class _InstrumentMaster:
         self._index = index
         self._token_map = token_map
         self._symbol_map = symbol_map
+        self._option_underlyings = None  # invalidate autocomplete cache
         self._loaded = True
 
     def _to_instrument(self, record: dict) -> Instrument:

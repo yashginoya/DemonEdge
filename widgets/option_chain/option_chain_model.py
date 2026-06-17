@@ -28,9 +28,17 @@ ALL_COLUMNS: list[ColumnDef] = [
     ColumnDef("ce_volume",  "Volume", "CE",     False, 80),
     ColumnDef("ce_iv",      "IV",     "CE",     True,  65),
     ColumnDef("ce_delta",   "Delta",  "CE",     False, 65),
+    ColumnDef("ce_bid_qty", "Bid Qty", "CE",    True,  85),
+    ColumnDef("ce_best_bid", "Bid",   "CE",     True,  70),
+    ColumnDef("ce_best_ask", "Ask",   "CE",     True,  70),
+    ColumnDef("ce_ask_qty", "Ask Qty", "CE",    True,  85),
     ColumnDef("ce_ltp",     "LTP",    "CE",     True,  80),
     ColumnDef("strike",     "Strike", "CENTER", True,  90),
     ColumnDef("pe_ltp",     "LTP",    "PE",     True,  80),
+    ColumnDef("pe_bid_qty", "Bid Qty", "PE",    True,  85),
+    ColumnDef("pe_best_bid", "Bid",   "PE",     True,  70),
+    ColumnDef("pe_best_ask", "Ask",   "PE",     True,  70),
+    ColumnDef("pe_ask_qty", "Ask Qty", "PE",    True,  85),
     ColumnDef("pe_delta",   "Delta",  "PE",     False, 65),
     ColumnDef("pe_iv",      "IV",     "PE",     True,  65),
     ColumnDef("pe_volume",  "Volume", "PE",     False, 80),
@@ -120,6 +128,10 @@ class OptionChainModel(QAbstractTableModel):
         iv: float,
         delta: float,
         volume: int,
+        best_bid: float = 0.0,
+        best_ask: float = 0.0,
+        bid_qty: int = 0,
+        ask_qty: int = 0,
     ) -> None:
         row_idx = self._ce_token_index.get(token)
         if row_idx is None:
@@ -131,6 +143,10 @@ class OptionChainModel(QAbstractTableModel):
         row.ce_iv = iv
         row.ce_delta = delta
         row.ce_volume = volume
+        row.ce_best_bid = best_bid
+        row.ce_best_ask = best_ask
+        row.ce_bid_qty = bid_qty
+        row.ce_ask_qty = ask_qty
 
         vis = self.visible_columns()
         ce_cols = [i for i, c in enumerate(vis) if c.side == "CE"]
@@ -150,6 +166,10 @@ class OptionChainModel(QAbstractTableModel):
         iv: float,
         delta: float,
         volume: int,
+        best_bid: float = 0.0,
+        best_ask: float = 0.0,
+        bid_qty: int = 0,
+        ask_qty: int = 0,
     ) -> None:
         row_idx = self._pe_token_index.get(token)
         if row_idx is None:
@@ -161,6 +181,10 @@ class OptionChainModel(QAbstractTableModel):
         row.pe_iv = iv
         row.pe_delta = delta
         row.pe_volume = volume
+        row.pe_best_bid = best_bid
+        row.pe_best_ask = best_ask
+        row.pe_bid_qty = bid_qty
+        row.pe_ask_qty = ask_qty
 
         vis = self.visible_columns()
         pe_cols = [i for i, c in enumerate(vis) if c.side == "PE"]
@@ -248,6 +272,14 @@ class OptionChainModel(QAbstractTableModel):
             return f"{row.ce_delta:.3f}" if row.ce_delta else "—"
         if key == "ce_volume":
             return f"{row.ce_volume:,}" if row.ce_volume else "—"
+        if key == "ce_best_bid":
+            return f"{row.ce_best_bid:.2f}" if row.ce_best_bid else "—"
+        if key == "ce_best_ask":
+            return f"{row.ce_best_ask:.2f}" if row.ce_best_ask else "—"
+        if key == "ce_bid_qty":
+            return f"{row.ce_bid_qty:,}" if row.ce_bid_qty else "—"
+        if key == "ce_ask_qty":
+            return f"{row.ce_ask_qty:,}" if row.ce_ask_qty else "—"
         if key == "strike":
             return f"{row.strike:.0f}"
         if key == "pe_ltp":
@@ -265,6 +297,14 @@ class OptionChainModel(QAbstractTableModel):
             return f"{row.pe_delta:.3f}" if row.pe_delta else "—"
         if key == "pe_volume":
             return f"{row.pe_volume:,}" if row.pe_volume else "—"
+        if key == "pe_best_bid":
+            return f"{row.pe_best_bid:.2f}" if row.pe_best_bid else "—"
+        if key == "pe_best_ask":
+            return f"{row.pe_best_ask:.2f}" if row.pe_best_ask else "—"
+        if key == "pe_bid_qty":
+            return f"{row.pe_bid_qty:,}" if row.pe_bid_qty else "—"
+        if key == "pe_ask_qty":
+            return f"{row.pe_ask_qty:,}" if row.pe_ask_qty else "—"
         return ""
 
     def _foreground(self, col: ColumnDef, row: OptionChainRow) -> QColor:
@@ -285,6 +325,10 @@ class OptionChainModel(QAbstractTableModel):
                 return _CLR_GREEN
             if row.pe_oi_change < 0:
                 return _CLR_RED
+        if key in ("ce_best_bid", "ce_bid_qty", "pe_best_bid", "pe_bid_qty"):
+            return _CLR_GREEN
+        if key in ("ce_best_ask", "ce_ask_qty", "pe_best_ask", "pe_ask_qty"):
+            return _CLR_RED
         return _CLR_TEXT
 
     def _background(self, row: OptionChainRow) -> QColor:

@@ -2,6 +2,40 @@
 
 ---
 
+## 2026-06-17 — feat: Bid/Ask columns in Option Chain + fix underlying-feed NameError
+
+### Added
+- `widgets/option_chain/option_chain_row.py` — new per-side fields: `ce_best_bid`, `ce_best_ask`, `ce_bid_qty`, `ce_ask_qty` (+ PE equivalents).
+- `widgets/option_chain/option_chain_model.py` — four new columns per side: **Bid Qty | Bid | Ask | Ask Qty**, inserted symmetrically just outside LTP (visible by default). Bid cells coloured green, ask cells red. `update_ce`/`update_pe` extended with `best_bid`, `best_ask`, `bid_qty`, `ask_qty` (best bid/ask = top-of-book depth price; bid/ask qty = total pending buy/sell quantity).
+- `widgets/option_chain/option_chain_widget.py` — `_on_tick_ui` now reads `tick.depth_buy[0].price` / `tick.depth_sell[0].price` and `tick.total_buy_quantity` / `tick.total_sell_quantity` from the SNAP_QUOTE tick and feeds them to the model.
+
+### Fixed
+- `widgets/option_chain/option_chain_widget.py` — `_subscribe_underlying` referenced the long-removed `INDEX_TOKENS` global, raising `NameError` after the chain loaded — which left the Option Chain perpetually showing "Loading…" and prevented the underlying spot feed / ATM re-centering from starting. Now resolves the underlying via `BrokerManager.get_broker().get_index_info()` (indices) and a broker-agnostic EQ instrument-master lookup (stocks), matching the chain loader.
+
+### Changed
+- `widgets/option_chain/option_chain_widget.py` — column visibility now persists as an explicit `column_visibility` map (legacy `visible_columns` list still written/read). New columns are exempted from legacy-layout hiding so they appear by default even on pre-existing saved layouts.
+
+---
+
+## 2026-06-17 — feat: Bid/Ask Quantity Watcher widget
+
+### Added
+- `widgets/bid_ask_watcher/ticker_watch.py` — `TickerWatch(QObject)`: per-underlying controller. Resolves the option chain + nearest expiries (`option_chain_builder`) and the underlying token (`get_index_info` for indices, EQ search for stocks) off the UI thread, then subscribes the underlying in LTP mode and the option legs in QUOTE mode. Sums live `total_buy_quantity` (bid) and `total_sell_quantity` (ask) across N call strikes (ATM + N-1 **above**) and N put strikes (ATM + N-1 **below**). Re-centers the strike window automatically as the underlying ATM moves. Feed callbacks bridged to the UI thread via an internal signal; `_active` guard makes show/hide subscribe-cycling safe.
+- `widgets/bid_ask_watcher/bid_ask_model.py` — `BidAskModel` table model: `Symbol | N | ATM | Expiry | Call Bid | Call Ask | C B/A | Put Bid | Put Ask | P B/A`. Bid cells green, ask red, B/A ratio green when ≥1 else red. `_fmt_qty` does Indian comma grouping.
+- `widgets/bid_ask_watcher/add_ticker_dialog.py` — `AddTickerDialog`: enter underlying, load expiries, pick expiry (default nearest) + strikes per side (default 5). Reused in edit mode (underlying read-only).
+- `widgets/bid_ask_watcher/bid_ask_watcher_widget.py` — `BidAskWatcherWidget(BaseWidget)` (`widget_id="bid_ask_watcher"`, category "Market Data"). Add/Configure/Remove rows; owns the `TickerWatch` objects; coalesces high-frequency tick updates into ~10 Hz repaints; persists `{underlying, expiry, num_strikes}` per ticker. Self-registers.
+
+### Changed
+- `app/main_window.py` — added the `bid_ask_watcher` module import so it self-registers in the widget registry / command palette.
+- `docs/widget_guide.md` — documented the new widget and refreshed the widget table.
+
+### Architecture Decisions
+- **Calls go up / Puts go down** for the "ATM to OTM4" window (each side toward its own OTM), per user spec. Strikes per side configurable per ticker (default 5).
+- **Per-ticker selectable expiry** (default nearest).
+- Option legs subscribed in **QUOTE mode** (carries `total_buy_quantity`/`total_sell_quantity`) rather than full depth — lighter.
+
+---
+
 ## 2026-06-16 — feat: Zerodha Kite broker + feed (coexists with Angel)
 
 ### Added

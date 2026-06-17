@@ -17,6 +17,10 @@ class OptionChainRow:
     ce_iv: float = 0.0
     ce_delta: float = 0.0
     ce_volume: int = 0
+    ce_best_bid: float = 0.0
+    ce_best_ask: float = 0.0
+    ce_bid_qty: int = 0      # total pending buy quantity (market-wide)
+    ce_ask_qty: int = 0      # total pending sell quantity (market-wide)
 
     # PE side
     pe_token: str = ""
@@ -26,6 +30,10 @@ class OptionChainRow:
     pe_iv: float = 0.0
     pe_delta: float = 0.0
     pe_volume: int = 0
+    pe_best_bid: float = 0.0
+    pe_best_ask: float = 0.0
+    pe_bid_qty: int = 0
+    pe_ask_qty: int = 0
 
     # ATM flag
     is_atm: bool = False

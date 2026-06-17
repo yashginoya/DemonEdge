@@ -732,7 +732,13 @@ class OptionChainWidget(BaseWidget):
                 )
 
     def _subscribe_underlying(self) -> None:
-        info = INDEX_TOKENS.get(self._underlying_name)
+        from broker.broker_manager import BrokerManager
+        try:
+            info = BrokerManager.get_broker().get_index_info(self._underlying_name)
+        except Exception as exc:
+            logger.warning("get_index_info failed: %s", exc)
+            info = None
+
         if info:
             self._underlying_token    = info["token"]
             self._underlying_exchange = info["exchange"]
@@ -742,22 +748,26 @@ class OptionChainWidget(BaseWidget):
                 self._on_underlying_tick,
                 SubscriptionMode.LTP,
             )
-        else:
-            # Stock option — try to find equity token
-            try:
-                from broker.instrument_master import InstrumentMaster
-                results = InstrumentMaster.search(
-                    f"{self._underlying_name}-EQ", exchange="NSE", max_results=3
+            return
+
+        # Stock option — find the cash-equity token (broker-agnostic).
+        try:
+            from broker.instrument_master import InstrumentMaster
+            results = InstrumentMaster.search(
+                self._underlying_name, exchange="NSE", max_results=10
+            )
+            eq = next(
+                (r for r in results if r.instrument_type == "EQ"),
+                results[0] if results else None,
+            )
+            if eq:
+                self._underlying_token    = eq.token
+                self._underlying_exchange = eq.exchange
+                self.subscribe_feed(
+                    eq.exchange, eq.token, self._on_underlying_tick, SubscriptionMode.LTP
                 )
-                if results:
-                    inst = results[0]
-                    self._underlying_token    = inst.token
-                    self._underlying_exchange = inst.exchange
-                    self.subscribe_feed(
-                        inst.exchange, inst.token, self._on_underlying_tick, SubscriptionMode.LTP
-                    )
-            except Exception as exc:
-                logger.warning("Could not subscribe underlying feed: %s", exc)
+        except Exception as exc:
+            logger.warning("Could not subscribe underlying feed: %s", exc)
 
     # ------------------------------------------------------------------
     # Tick callbacks (feed thread → signal → main thread)
@@ -780,6 +790,12 @@ class OptionChainWidget(BaseWidget):
         ltp    = tick.ltp
         volume = tick.volume or 0
         oi     = tick.open_interest or 0
+
+        # Best bid/ask (top of book) + total pending quantities (SNAP_QUOTE).
+        best_bid = tick.depth_buy[0].price if tick.depth_buy else 0.0
+        best_ask = tick.depth_sell[0].price if tick.depth_sell else 0.0
+        bid_qty  = int(tick.total_buy_quantity or 0)
+        ask_qty  = int(tick.total_sell_quantity or 0)
 
         # Compute OI change as delta from the first tick seen after chain load.
         # Angel One's open_interest_change_percentage binary field does not
@@ -806,7 +822,10 @@ class OptionChainWidget(BaseWidget):
                 if sigma > 0
                 else 0.0
             )
-            self._model.update_ce(tick.token, ltp, oi, oi_change, iv, delta, volume)
+            self._model.update_ce(
+                tick.token, ltp, oi, oi_change, iv, delta, volume,
+                best_bid, best_ask, bid_qty, ask_qty,
+            )
         else:
             strike = self._pe_token_strike.get(tick.token, 0.0)
             iv     = (
@@ -820,7 +839,10 @@ class OptionChainWidget(BaseWidget):
                 if sigma > 0
                 else 0.0
             )
-            self._model.update_pe(tick.token, ltp, oi, oi_change, iv, delta, volume)
+            self._model.update_pe(
+                tick.token, ltp, oi, oi_change, iv, delta, volume,
+                best_bid, best_ask, bid_qty, ask_qty,
+            )
 
     def _on_underlying_ltp_ui(self, ltp: float) -> None:
         self._underlying_ltp = ltp
@@ -882,21 +904,39 @@ class OptionChainWidget(BaseWidget):
         # _unsubscribe_all_feeds() is called by BaseWidget automatically
         pass
 
+    # Columns added after the original layout format — kept visible for legacy
+    # saved layouts that predate them (which only stored a visible-key list).
+    _NEW_DEFAULT_VISIBLE = {
+        "ce_bid_qty", "ce_best_bid", "ce_best_ask", "ce_ask_qty",
+        "pe_bid_qty", "pe_best_bid", "pe_best_ask", "pe_ask_qty",
+    }
+
     def save_state(self) -> dict:
         return {
-            "underlying":       self._underlying_name,
-            "expiry":           self._current_expiry,
-            "visible_columns":  [c.key for c in ALL_COLUMNS if c.visible],
-            "strikes_per_side": dict(self._strikes_per_side),
+            "underlying":        self._underlying_name,
+            "expiry":            self._current_expiry,
+            # Explicit per-column map so columns added in future versions keep
+            # their default visibility instead of being hidden on restore.
+            "column_visibility": {c.key: c.visible for c in ALL_COLUMNS},
+            "visible_columns":   [c.key for c in ALL_COLUMNS if c.visible],  # legacy
+            "strikes_per_side":  dict(self._strikes_per_side),
         }
 
     def restore_state(self, state: dict) -> None:
         underlying = state.get("underlying", "")
         expiry     = state.get("expiry", "")
-        vis_keys   = set(state.get("visible_columns", []))
 
-        if vis_keys:
+        vis_map = state.get("column_visibility")
+        if vis_map:
             for col in ALL_COLUMNS:
+                if col.key in vis_map:
+                    col.visible = bool(vis_map[col.key])
+                # else: column added after this layout was saved → keep default
+        elif state.get("visible_columns"):
+            vis_keys = set(state["visible_columns"])
+            for col in ALL_COLUMNS:
+                if col.key in self._NEW_DEFAULT_VISIBLE:
+                    continue  # not in legacy layouts — keep default visibility
                 col.visible = col.key in vis_keys
 
         self._strikes_per_side = dict(state.get("strikes_per_side", {}))
