@@ -53,12 +53,15 @@ class _LoadWorker(QRunnable):
             from broker.broker_manager import BrokerManager
             from broker.instrument_master import InstrumentMaster
 
-            expiries = builder.get_expiries(self._underlying, self._exchange)
+            # Auto-detect the F&O exchange (NFO for NSE, BFO for SENSEX/BANKEX).
+            opt_exchange = builder.get_option_exchange(self._underlying) or self._exchange
+
+            expiries = builder.get_expiries(self._underlying, opt_exchange)
             if not expiries:
                 self.signals.failed.emit(f"No options found for '{self._underlying}'")
                 return
             expiry = self._expiry if self._expiry in expiries else expiries[0]
-            rows = builder.build_chain(self._underlying, expiry, self._exchange)
+            rows = builder.build_chain(self._underlying, expiry, opt_exchange)
             if not rows:
                 self.signals.failed.emit(f"No strikes for '{self._underlying}' {expiry}")
                 return
@@ -90,6 +93,7 @@ class _LoadWorker(QRunnable):
                 "rows": rows,
                 "expiries": expiries,
                 "expiry": expiry,
+                "options_exchange": opt_exchange,
                 "underlying_token": str(u_token),
                 "underlying_exchange": u_exchange,
                 "seed_ltp": seed_ltp,
@@ -123,6 +127,7 @@ class TickerWatch(QObject):
         self.expiries: list[str] = []
         self._underlying_token = ""
         self._underlying_exchange = "NSE"
+        self._options_exchange = "NFO"
         self.underlying_ltp = 0.0
         self.atm_strike = 0.0
         self._atm_idx = -1
@@ -166,7 +171,7 @@ class TickerWatch(QObject):
         self._active = False
         feed = FeedManager.get_feed()
         for token in self._option_subscribed:
-            feed.unsubscribe("NFO", token, self._on_feed_tick)
+            feed.unsubscribe(self._options_exchange, token, self._on_feed_tick)
         self._option_subscribed.clear()
         if self._underlying_subscribed and self._underlying_token:
             feed.unsubscribe(self._underlying_exchange, self._underlying_token, self._on_feed_tick)
@@ -204,6 +209,7 @@ class TickerWatch(QObject):
         self._rows = payload["rows"]
         self.expiries = payload["expiries"]
         self.expiry = payload["expiry"]
+        self._options_exchange = payload.get("options_exchange", "NFO")
         self._underlying_token = payload["underlying_token"]
         self._underlying_exchange = payload["underlying_exchange"]
         self.underlying_ltp = payload["seed_ltp"] or 0.0
@@ -288,11 +294,11 @@ class TickerWatch(QObject):
         feed = FeedManager.get_feed()
 
         for token in self._option_subscribed - desired:
-            feed.unsubscribe("NFO", token, self._on_feed_tick)
+            feed.unsubscribe(self._options_exchange, token, self._on_feed_tick)
             self._buy.pop(token, None)
             self._sell.pop(token, None)
         for token in desired - self._option_subscribed:
-            feed.subscribe("NFO", token, self._on_feed_tick, SubscriptionMode.QUOTE)
+            feed.subscribe(self._options_exchange, token, self._on_feed_tick, SubscriptionMode.QUOTE)
 
         self._option_subscribed = desired
 

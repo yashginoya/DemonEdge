@@ -11,6 +11,24 @@ from widgets.option_chain.option_chain_row import OptionChainRow
 logger = get_logger(__name__)
 
 _OPT_TYPES = {"CE", "PE"}
+_OPT_EXCHANGES = ("NFO", "BFO")
+
+
+def get_option_exchange(underlying_name: str) -> str:
+    """Return the F&O exchange (``NFO``/``BFO``) that lists this underlying's options.
+
+    NSE-derivative underlyings (NIFTY, stocks) are on NFO; BSE-derivative
+    underlyings (SENSEX, BANKEX) are on BFO.  Returns ``""`` if no options exist.
+    """
+    name = underlying_name.upper().strip()
+    for _sym, _nm, record in InstrumentMaster._index:
+        if (
+            record.get("instrument_type") in _OPT_TYPES
+            and record.get("name") == name
+            and record.get("exchange") in _OPT_EXCHANGES
+        ):
+            return record.get("exchange", "")
+    return ""
 
 
 def build_chain(

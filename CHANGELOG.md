@@ -2,6 +2,22 @@
 
 ---
 
+## 2026-06-17 — fix: BSE (BFO) option support + NSE/BSE-tagged ticker autocomplete
+
+### Fixed
+- BSE-derivative underlyings (SENSEX, BANKEX) showed "No options found" in both the Option Chain and the Bid/Ask Watcher because the F&O exchange was hardcoded to `NFO` — their options live on `BFO`. Now auto-detected per underlying.
+
+### Added
+- `widgets/option_chain/option_chain_builder.py` — `get_option_exchange(underlying)` returns the F&O exchange (`NFO`/`BFO`) that lists an underlying's options (scans the instrument master), or `""`.
+
+### Changed
+- `widgets/option_chain/option_chain_widget.py` — chain load auto-detects the options exchange via `get_option_exchange`; the value is threaded through `_ChainLoadWorker` → `_chain_ready` signal → `_on_chain_ready` into `self._options_exchange`, which now drives every option subscribe/unsubscribe, the token→Instrument lookup, and the F5 Market-Depth fallback (previously all hardcoded `"NFO"`).
+- `widgets/bid_ask_watcher/ticker_watch.py` — `_LoadWorker` auto-detects the options exchange; `TickerWatch` stores `_options_exchange` and uses it for all option subscriptions/unsubscriptions and re-centering (previously `"NFO"`).
+- `broker/instrument_master.py` — `option_underlyings()` now returns sorted `(name, fo_exchange)` pairs instead of names, so callers can distinguish NSE vs BSE underlyings.
+- `widgets/bid_ask_watcher/add_ticker_dialog.py` — autocomplete now tags each suggestion with its exchange, e.g. `SENSEX (BSE)`, `NIFTY (NSE)`. New `_resolve_underlying()` maps a tagged/raw entry back to `(clean_name, fo_exchange)`; expiry lookup and accept use the detected exchange (fixes "No options found for SENSEX" in the add dialog).
+
+---
+
 ## 2026-06-17 — feat: Bid/Ask columns in Option Chain + fix underlying-feed NameError
 
 ### Added

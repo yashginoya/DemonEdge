@@ -72,6 +72,8 @@ class AddTickerDialog(QDialog):
         super().__init__(parent)
         self._edit = edit
         self._initial_expiry = expiry
+        # display string ("NAME (BSE)") → (clean_name, fo_exchange)
+        self._display_map: dict[str, tuple[str, str]] = {}
         self.setWindowTitle("Configure Symbol" if edit else "Add Symbol")
         self.setMinimumWidth(320)
         self.setModal(True)
@@ -139,14 +141,21 @@ class AddTickerDialog(QDialog):
         self._underlying_input.setFocus()
 
     def _attach_completer(self) -> None:
-        """Suggest option-bearing underlyings as the user types."""
+        """Suggest option-bearing underlyings (tagged NSE/BSE) as the user types."""
         from broker.instrument_master import InstrumentMaster
         if not InstrumentMaster.is_loaded():
             return
-        names = InstrumentMaster.option_underlyings()
-        if not names:
+        pairs = InstrumentMaster.option_underlyings()  # [(name, fo_exchange)]
+        if not pairs:
             return
-        completer = QCompleter(names, self)
+        displays: list[str] = []
+        for name, fo in pairs:
+            cash = "BSE" if fo == "BFO" else "NSE"
+            disp = f"{name} ({cash})"
+            self._display_map[disp] = (name, fo)
+            displays.append(disp)
+
+        completer = QCompleter(displays, self)
         completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         completer.setFilterMode(Qt.MatchFlag.MatchContains)
         completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
@@ -156,10 +165,18 @@ class AddTickerDialog(QDialog):
         completer.activated.connect(lambda _t: QTimer.singleShot(0, self._load_expiries))
         self._underlying_input.setCompleter(completer)
 
+    def _resolve_underlying(self) -> tuple[str, str]:
+        """Return (clean_name, fo_exchange) from the input (tagged or raw)."""
+        text = self._underlying_input.text().strip()
+        if text in self._display_map:
+            return self._display_map[text]
+        name = text.upper()
+        return name, (builder.get_option_exchange(name) or "NFO")
+
     # ------------------------------------------------------------------
 
     def _load_expiries(self) -> None:
-        underlying = self._underlying_input.text().upper().strip()
+        underlying, exchange = self._resolve_underlying()
         if not underlying:
             return
 
@@ -168,7 +185,7 @@ class AddTickerDialog(QDialog):
             self._status.setText("Instrument master loading — please wait…")
             return
 
-        expiries = builder.get_expiries(underlying, "NFO")
+        expiries = builder.get_expiries(underlying, exchange)
         self._expiry_combo.clear()
         if not expiries:
             self._status.setText(f"No options found for '{underlying}'.")
@@ -186,7 +203,7 @@ class AddTickerDialog(QDialog):
         self._ok_btn.setEnabled(True)
 
     def _accept(self) -> None:
-        underlying = self._underlying_input.text().upper().strip()
+        underlying, _exchange = self._resolve_underlying()
         expiry = self._expiry_combo.currentText()
         if not underlying or not expiry:
             return

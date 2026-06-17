@@ -187,20 +187,22 @@ class _InstrumentMaster:
             return None
         return self._to_instrument(record)
 
-    def option_underlyings(self) -> list[str]:
-        """Return sorted distinct underlying names that have listed options (CE/PE).
+    def option_underlyings(self) -> list[tuple[str, str]]:
+        """Return sorted distinct ``(name, fo_exchange)`` pairs for option underlyings.
 
-        Useful for autocomplete where only option-bearing underlyings are valid.
-        Computed once and cached for the loaded dump.
+        ``fo_exchange`` is ``"NFO"`` (NSE derivatives) or ``"BFO"`` (BSE
+        derivatives), so callers can disambiguate e.g. ``SENSEX`` (BFO) from
+        NSE underlyings.  Useful for autocomplete.  Computed once and cached.
         """
         if self._option_underlyings is None:
-            names: set[str] = set()
+            pairs: set[tuple[str, str]] = set()
             for _sym, _name, rec in self._index:
                 if rec.get("instrument_type") in ("CE", "PE"):
                     nm = rec.get("name", "")
-                    if nm:
-                        names.add(nm)
-            self._option_underlyings = sorted(names)
+                    ex = rec.get("exchange", "")
+                    if nm and ex:
+                        pairs.add((nm, ex))
+            self._option_underlyings = sorted(pairs)
         return self._option_underlyings
 
     # ------------------------------------------------------------------

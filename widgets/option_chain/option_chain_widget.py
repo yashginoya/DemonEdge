@@ -177,7 +177,7 @@ class _StrikesSettingsDialog(QDialog):
 # ── Worker ────────────────────────────────────────────────────────────────────
 
 class _ChainLoadSignals(QObject):
-    finished = Signal(list, float, list, str, str)  # rows, underlying_ltp, expiries, expiry, underlying_token_exchange
+    finished = Signal(list, float, list, str, str, str)  # rows, ltp, expiries, expiry, underlying_exch, options_exch
     failed   = Signal(str)
 
 
@@ -198,13 +198,16 @@ class _ChainLoadWorker(QRunnable):
 
     def run(self) -> None:
         try:
-            expiries = builder.get_expiries(self._underlying, self._exchange)
+            # Auto-detect the F&O exchange (NFO for NSE, BFO for SENSEX/BANKEX).
+            opt_exchange = builder.get_option_exchange(self._underlying) or self._exchange
+
+            expiries = builder.get_expiries(self._underlying, opt_exchange)
             if not expiries:
                 self.signals.failed.emit(f"No options found for '{self._underlying}'")
                 return
 
             expiry = self._expiry if self._expiry in expiries else expiries[0]
-            rows   = builder.build_chain(self._underlying, expiry, self._exchange)
+            rows   = builder.build_chain(self._underlying, expiry, opt_exchange)
 
             # Fetch underlying LTP
             ltp = 0.0
@@ -230,7 +233,7 @@ class _ChainLoadWorker(QRunnable):
             # Underlying exchange for feed subscription
             underlying_exch = idx_info.get("exchange", "NSE")
 
-            self.signals.finished.emit(rows, ltp, expiries, expiry, underlying_exch)
+            self.signals.finished.emit(rows, ltp, expiries, expiry, underlying_exch, opt_exchange)
 
         except Exception as exc:
             logger.exception("ChainLoadWorker failed")
@@ -254,7 +257,7 @@ class OptionChainWidget(BaseWidget):
     underlying_ticked  = Signal(float)         # underlying LTP
 
     # Chain loaded on worker thread → update UI on main thread
-    _chain_ready = Signal(list, float, list, str, str)
+    _chain_ready = Signal(list, float, list, str, str, str)
     _chain_error = Signal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -269,6 +272,7 @@ class OptionChainWidget(BaseWidget):
         self._visible_rows:    list[OptionChainRow] = []   # filtered window around ATM
         self._underlying_token:  str = ""
         self._underlying_exchange: str = "NSE"
+        self._options_exchange: str = "NFO"
 
         # Per-symbol strikes-per-side settings: {"NIFTY": 20, "BANKNIFTY": 15, ...}
         self._strikes_per_side: dict[str, int] = {}
@@ -498,13 +502,13 @@ class OptionChainWidget(BaseWidget):
         # Look up full Instrument from InstrumentMaster
         from broker.instrument_master import InstrumentMaster
         from models.instrument import Instrument
-        instrument = InstrumentMaster.get_by_token("NFO", token)
+        instrument = InstrumentMaster.get_by_token(self._options_exchange, token)
         if instrument is None:
             # Construct a minimal Instrument so Market Depth can still subscribe
             instrument = Instrument(
                 symbol=token,
                 token=token,
-                exchange="NFO",
+                exchange=self._options_exchange,
                 name=token,
                 instrument_type=side if side in ("CE", "PE") else "OTHER",
             )
@@ -548,10 +552,10 @@ class OptionChainWidget(BaseWidget):
     def _unsubscribe_chain_token(self, token: str, callback) -> None:
         """Surgically unsubscribe one chain token and remove it from the tracking list."""
         from feed.feed_manager import FeedManager
-        FeedManager.get_feed().unsubscribe("NFO", token, callback)
+        FeedManager.get_feed().unsubscribe(self._options_exchange, token, callback)
         self._feed_subscriptions = [
             (e, t, cb, m) for e, t, cb, m in self._feed_subscriptions
-            if not (e == "NFO" and t == token and cb == callback)
+            if not (e == self._options_exchange and t == token and cb == callback)
         ]
 
     def _refilter_visible_rows(self) -> None:
@@ -575,11 +579,11 @@ class OptionChainWidget(BaseWidget):
         for r in new_visible:
             if r.ce_token and r.ce_token not in old_ce:
                 self.subscribe_feed(
-                    "NFO", r.ce_token, self._on_ce_tick, SubscriptionMode.SNAP_QUOTE
+                    self._options_exchange, r.ce_token, self._on_ce_tick, SubscriptionMode.SNAP_QUOTE
                 )
             if r.pe_token and r.pe_token not in old_pe:
                 self.subscribe_feed(
-                    "NFO", r.pe_token, self._on_pe_tick, SubscriptionMode.SNAP_QUOTE
+                    self._options_exchange, r.pe_token, self._on_pe_tick, SubscriptionMode.SNAP_QUOTE
                 )
 
         self._visible_rows = new_visible
@@ -634,6 +638,7 @@ class OptionChainWidget(BaseWidget):
         expiries: list[str],
         expiry: str,
         underlying_exchange: str,
+        options_exchange: str,
     ) -> None:
         # Recover underlying name from the input field (worker already uppercased it)
         self._underlying_name = self._underlying_input.text().upper().strip()
@@ -641,6 +646,7 @@ class OptionChainWidget(BaseWidget):
         self._underlying_ltp  = underlying_ltp
         self._rows            = rows          # full strike list for the expiry
         self._underlying_exchange = underlying_exchange
+        self._options_exchange = options_exchange or "NFO"
 
         # Reset OI baseline so the first tick for each token after a chain
         # reload becomes the new reference point for OI Chg calculation.
@@ -724,11 +730,11 @@ class OptionChainWidget(BaseWidget):
         for row in rows_to_sub:
             if row.ce_token:
                 self.subscribe_feed(
-                    "NFO", row.ce_token, self._on_ce_tick, SubscriptionMode.SNAP_QUOTE
+                    self._options_exchange, row.ce_token, self._on_ce_tick, SubscriptionMode.SNAP_QUOTE
                 )
             if row.pe_token:
                 self.subscribe_feed(
-                    "NFO", row.pe_token, self._on_pe_tick, SubscriptionMode.SNAP_QUOTE
+                    self._options_exchange, row.pe_token, self._on_pe_tick, SubscriptionMode.SNAP_QUOTE
                 )
 
     def _subscribe_underlying(self) -> None:
