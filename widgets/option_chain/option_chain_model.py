@@ -195,6 +195,34 @@ class OptionChainModel(QAbstractTableModel):
                 [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.ForegroundRole],
             )
 
+    def apply_oi_baseline(self, token: str, prev_day_oi: int) -> None:
+        """Recompute a token's day OI change once its previous-day OI is known.
+
+        Uses the row's current OI (from the latest tick) so the cell updates
+        immediately, even if no fresh tick arrives right after the baseline.
+        """
+        row_idx = self._ce_token_index.get(token)
+        if row_idx is not None:
+            row = self._rows[row_idx]
+            row.ce_oi_change = (row.ce_oi - prev_day_oi) if row.ce_oi > 0 else 0
+            self._emit_oi_chg(row_idx, "CE")
+            return
+        row_idx = self._pe_token_index.get(token)
+        if row_idx is not None:
+            row = self._rows[row_idx]
+            row.pe_oi_change = (row.pe_oi - prev_day_oi) if row.pe_oi > 0 else 0
+            self._emit_oi_chg(row_idx, "PE")
+
+    def _emit_oi_chg(self, row_idx: int, side: str) -> None:
+        vis = self.visible_columns()
+        cols = [i for i, c in enumerate(vis) if c.side == side]
+        if cols:
+            self.dataChanged.emit(
+                self.index(row_idx, cols[0]),
+                self.index(row_idx, cols[-1]),
+                [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.ForegroundRole],
+            )
+
     def update_atm(self, underlying_ltp: float) -> None:
         """Recompute ATM + ITM/OTM classification when underlying price changes."""
         self._underlying_ltp = underlying_ltp

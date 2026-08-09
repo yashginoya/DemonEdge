@@ -2,6 +2,22 @@
 
 ---
 
+## 2026-06-17 — feat: Option Chain "OI Chg" = conventional day OI change
+
+### Changed
+- `widgets/option_chain/option_chain_widget.py` — the **OI Chg** column now shows the conventional **day OI change** (current OI − previous trading day's closing OI) instead of the previous session-since-load delta. Previous-day OI is fetched per **visible** strike by a new throttled background `_PrevDayOIWorker(QThread)` (≈3 req/s to respect Kite's historical rate limit), queued on chain load and on ATM re-center. Until a strike's baseline arrives the cell shows "—". `_on_tick_ui` now computes `current_oi − prev_day_oi`; the old `_oi_baseline` session logic was removed. Fetcher queue is paused on hide and stopped (`stop()` + `wait`) on close.
+
+### Added
+- `broker/base_broker.py` — optional capability `get_prev_day_oi(exchange, token) -> int | None` (default `None` = unsupported; must return `None` on failure, run I/O off the Qt thread).
+- `broker/kite_broker.py` — `get_prev_day_oi` implementation: fetches ~12 days of daily candles with `oi=True` and returns the OI of the most recent candle dated before today.
+- `widgets/option_chain/option_chain_model.py` — `apply_oi_baseline(token, prev_oi)` recomputes a token's OI change from its current OI the moment its baseline arrives (so the cell updates without waiting for the next tick), plus `_emit_oi_chg` helper.
+
+### Known Issues / TODOs
+- Angel does not implement `get_prev_day_oi`, so OI Chg shows "—" on Angel until/unless its prior-day OI source is wired up.
+- A genuine zero day-change displays as "—" (0 is the not-yet-loaded sentinel) — a rare cosmetic edge.
+
+---
+
 ## 2026-06-17 — fix: BSE (BFO) option support + NSE/BSE-tagged ticker autocomplete
 
 ### Fixed

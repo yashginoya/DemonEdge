@@ -518,6 +518,36 @@ class KiteBroker(BaseBroker):
         "SENSEX":     {"token": "265",    "exchange": "BSE"},
     }
 
+    def get_prev_day_oi(self, exchange: str, token: str) -> int | None:
+        """Previous trading day's closing OI, from daily candles (``oi=True``).
+
+        Returns ``None`` if unavailable (no prior candle / fetch error).
+        """
+        self._require_connection()
+        try:
+            from datetime import timedelta
+            to_dt = datetime.now()
+            from_dt = to_dt - timedelta(days=12)  # spans weekends/holidays
+            candles = self._kite.historical_data(
+                instrument_token=_safe_int(token),
+                from_date=from_dt,
+                to_date=to_dt,
+                interval="day",
+                oi=True,
+            ) or []
+            today = date.today()
+            # Most recent candle dated strictly before today = prev day's close.
+            for c in reversed(candles):
+                cdate = c.get("date")
+                if isinstance(cdate, datetime):
+                    cdate = cdate.date()
+                if isinstance(cdate, date) and cdate < today:
+                    return int(c.get("oi", 0) or 0)
+            return None
+        except Exception as exc:
+            logger.debug("get_prev_day_oi failed for %s:%s — %s", exchange, token, exc)
+            return None
+
     def get_index_info(self, symbol: str) -> dict | None:
         entry = self._INDEX_SYMBOLS.get(symbol.upper())
         if entry is None:

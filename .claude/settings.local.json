@@ -3,7 +3,8 @@
     "allow": [
       "Bash(uv:*)",
       "Bash(mkdir:*)",
-      "Bash(touch:*)"
+      "Bash(touch:*)",
+      "WebFetch(domain:kite.trade)"
     ]
   }
 }

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import math
+import queue
+import time
 from datetime import date, datetime
 from typing import Callable
 
-from PySide6.QtCore import QModelIndex, QObject, QRunnable, QThreadPool, Qt, Signal
+from PySide6.QtCore import QModelIndex, QObject, QRunnable, QThread, QThreadPool, Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -44,6 +46,57 @@ _STRIKE_WINDOW       = 50  # subscribe only ±50 strikes of ATM when over limit
 
 # Default strikes shown/subscribed on each side of ATM
 _DEFAULT_STRIKES_PER_SIDE = 20
+
+# Throttle between previous-day-OI historical calls (Kite historical ≈ 3 req/s)
+_PREV_OI_THROTTLE_S = 0.34
+
+
+class _PrevDayOIWorker(QThread):
+    """Background fetcher for each strike's previous-day closing OI.
+
+    Pops (exchange, token) jobs from a queue and calls
+    ``broker.get_prev_day_oi`` with throttling to respect the broker's
+    historical-data rate limit.  Emits ``fetched(token, prev_oi)`` per result.
+    """
+
+    fetched = Signal(str, int)  # token, previous-day OI
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._queue: "queue.Queue[tuple[str, str]]" = queue.Queue()
+        self._running = True
+
+    def enqueue(self, exchange: str, tokens: list[str]) -> None:
+        for t in tokens:
+            self._queue.put((exchange, t))
+
+    def clear(self) -> None:
+        try:
+            while True:
+                self._queue.get_nowait()
+        except queue.Empty:
+            pass
+
+    def stop(self) -> None:
+        self._running = False
+        self.clear()
+
+    def run(self) -> None:
+        from broker.broker_manager import BrokerManager
+        while self._running:
+            try:
+                exchange, token = self._queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            if not self._running:
+                break
+            try:
+                oi = BrokerManager.get_broker().get_prev_day_oi(exchange, token)
+            except Exception:
+                oi = None
+            if oi is not None:
+                self.fetched.emit(token, int(oi))
+            time.sleep(_PREV_OI_THROTTLE_S)
 
 _QSS = """
 QWidget {
@@ -281,11 +334,13 @@ class OptionChainWidget(BaseWidget):
         self._ce_token_strike: dict[str, float] = {}
         self._pe_token_strike: dict[str, float] = {}
 
-        # OI baseline per token: first OI seen after chain load.
-        # OI Chg = current_oi - baseline_oi (intraday delta).
-        # open_interest_change_percentage from Angel's binary feed is not
-        # a usable absolute change value, so we compute it ourselves.
-        self._oi_baseline: dict[str, int] = {}
+        # Conventional day OI change = current_oi − previous-day closing OI.
+        # Previous-day OI is fetched per visible strike (throttled, in the
+        # background) by _PrevDayOIWorker; until it arrives the OI Chg cell
+        # shows "—".  _oi_pending tracks tokens already queued for fetch.
+        self._oi_prev_day: dict[str, int] = {}
+        self._oi_pending: set[str] = set()
+        self._oi_fetcher: "_PrevDayOIWorker | None" = None
 
         self._model = OptionChainModel()
 
@@ -587,6 +642,8 @@ class OptionChainWidget(BaseWidget):
                 )
 
         self._visible_rows = new_visible
+        # Fetch previous-day OI for strikes newly brought into the window.
+        self._enqueue_oi_baselines(new_visible)
         atm_strike = (
             builder.get_atm_strike(new_visible, ltp)
             if ltp > 0 and new_visible
@@ -648,9 +705,12 @@ class OptionChainWidget(BaseWidget):
         self._underlying_exchange = underlying_exchange
         self._options_exchange = options_exchange or "NFO"
 
-        # Reset OI baseline so the first tick for each token after a chain
-        # reload becomes the new reference point for OI Chg calculation.
-        self._oi_baseline.clear()
+        # Reset previous-day OI baselines for the new chain/expiry; they will be
+        # re-fetched for the visible strikes once subscriptions are set up.
+        self._oi_prev_day.clear()
+        self._oi_pending.clear()
+        if self._oi_fetcher is not None:
+            self._oi_fetcher.clear()
 
         # Build token→strike lookup over full row set (subscribed subset is smaller
         # but having extra entries is harmless — only subscribed tokens send ticks)
@@ -708,6 +768,33 @@ class OptionChainWidget(BaseWidget):
     # Feed subscriptions
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # Previous-day OI baselines (for conventional day OI change)
+    # ------------------------------------------------------------------
+
+    def _ensure_oi_fetcher(self) -> "_PrevDayOIWorker":
+        if self._oi_fetcher is None:
+            self._oi_fetcher = _PrevDayOIWorker(self)
+            self._oi_fetcher.fetched.connect(self._on_prev_day_oi)
+            self._oi_fetcher.start()
+        return self._oi_fetcher
+
+    def _enqueue_oi_baselines(self, rows: list[OptionChainRow]) -> None:
+        """Queue previous-day OI fetches for the visible strikes not yet known."""
+        tokens: list[str] = []
+        for r in rows:
+            for tk in (r.ce_token, r.pe_token):
+                if tk and tk not in self._oi_prev_day and tk not in self._oi_pending:
+                    self._oi_pending.add(tk)
+                    tokens.append(tk)
+        if tokens:
+            self._ensure_oi_fetcher().enqueue(self._options_exchange, tokens)
+
+    def _on_prev_day_oi(self, token: str, prev_oi: int) -> None:
+        self._oi_prev_day[token] = prev_oi
+        self._oi_pending.discard(token)
+        self._model.apply_oi_baseline(token, prev_oi)
+
     def _subscribe_chain(self, rows: list[OptionChainRow]) -> None:
         total_tokens = sum(
             (1 if r.ce_token else 0) + (1 if r.pe_token else 0) for r in rows
@@ -736,6 +823,9 @@ class OptionChainWidget(BaseWidget):
                 self.subscribe_feed(
                     self._options_exchange, row.pe_token, self._on_pe_tick, SubscriptionMode.SNAP_QUOTE
                 )
+
+        # Fetch previous-day OI baselines for the visible strikes (throttled).
+        self._enqueue_oi_baselines(rows_to_sub)
 
     def _subscribe_underlying(self) -> None:
         from broker.broker_manager import BrokerManager
@@ -803,15 +893,10 @@ class OptionChainWidget(BaseWidget):
         bid_qty  = int(tick.total_buy_quantity or 0)
         ask_qty  = int(tick.total_sell_quantity or 0)
 
-        # Compute OI change as delta from the first tick seen after chain load.
-        # Angel One's open_interest_change_percentage binary field does not
-        # contain a usable absolute OI change value, so we derive it ourselves.
-        if oi > 0:
-            if tick.token not in self._oi_baseline:
-                self._oi_baseline[tick.token] = oi
-            oi_change = oi - self._oi_baseline[tick.token]
-        else:
-            oi_change = 0
+        # Conventional day OI change = current OI − previous-day closing OI.
+        # Stays 0 (displayed "—") until the previous-day baseline is fetched.
+        prev_oi = self._oi_prev_day.get(tick.token)
+        oi_change = (oi - prev_oi) if (prev_oi is not None and oi > 0) else 0
 
         T = self._time_to_expiry()
 
@@ -907,8 +992,17 @@ class OptionChainWidget(BaseWidget):
             self._load_chain(self._underlying_name, self._current_expiry)
 
     def on_hide(self) -> None:
-        # _unsubscribe_all_feeds() is called by BaseWidget automatically
-        pass
+        # _unsubscribe_all_feeds() is called by BaseWidget automatically.
+        # Halt background OI fetches while hidden (a fresh load re-queues them).
+        if self._oi_fetcher is not None:
+            self._oi_fetcher.clear()
+
+    def closeEvent(self, event) -> None:
+        if self._oi_fetcher is not None:
+            self._oi_fetcher.stop()
+            self._oi_fetcher.wait(3000)
+            self._oi_fetcher = None
+        super().closeEvent(event)
 
     # Columns added after the original layout format — kept visible for legacy
     # saved layouts that predate them (which only stored a visible-key list).

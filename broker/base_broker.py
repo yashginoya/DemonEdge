@@ -174,3 +174,18 @@ class BaseBroker(ABC):
             broker.get_index_info("RELIANCE") # → None  (not an index)
         """
         ...
+
+    # ------------------------------------------------------------------
+    # Optional capabilities (default: unsupported)
+    # ------------------------------------------------------------------
+
+    def get_prev_day_oi(self, exchange: str, token: str) -> int | None:
+        """Return the previous trading day's closing open interest for a contract.
+
+        Optional capability — used for conventional day OI-change calculations.
+        The default returns ``None`` (not supported); brokers that can supply it
+        (e.g. via historical daily candles) override this.  Implementations must
+        return ``None`` on failure rather than raising, and run any I/O off the
+        Qt main thread.
+        """
+        return None
